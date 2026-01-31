@@ -9,7 +9,9 @@ import typer
 
 from finance_cli.itau import (
     blocks_to_statements,
+    blocks_to_statements_with_layout,
     extract_blocks,
+    extract_blocks_with_layout,
     extract_total_from_pdf,
     extract_raw_text,
     extract_emissao_year,
@@ -20,6 +22,7 @@ from finance_cli.itau import (
     write_csv_lines,
     write_csv_lines_idempotent,
     parse_brl_amount,
+    annotate_pdf_blocks,
 )
 from finance_cli.nu import convert_date_format
 
@@ -35,6 +38,8 @@ class DebugMode(str, Enum):
     raw = "raw"
     total = "total"
     normalized = "normalized"
+    layout = "layout"
+    annotate = "annotate"
 
 
 @app.command("nu")
@@ -83,7 +88,7 @@ def parse_itau(
         False,
         "--debug",
         "-d",
-        help="Debug output (raw, total, or all) and exit.",
+        help="Debug output (raw, total, normalized, layout, annotate, or all) and exit.",
     ),
     sort: str | None = typer.Option(
         None,
@@ -137,6 +142,28 @@ def parse_itau(
                 from finance_cli.itau import normalize_pdf_text
                 raw_text = extract_raw_text(pdf_path)
                 outputs.append(normalize_pdf_text(raw_text))
+            if mode in {DebugMode.all, DebugMode.layout}:
+                resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
+                payment_date = extract_vencimento_date(pdf_path)
+                blocks = extract_blocks_with_layout(pdf_path)
+                statements = blocks_to_statements_with_layout(
+                    blocks, resolved_year, payment_date
+                )
+                outputs.append(
+                    "page,column,index,x0,y0,transaction_date,payment_date,description,amount"
+                )
+                for index, page, column, x0, y0, row in statements:
+                    parts = row.split(",", 4)
+                    if len(parts) != 5:
+                        outputs.append(f"{page},{column},{index},{x0:.2f},{y0:.2f},{row}")
+                        continue
+                    outputs.append(
+                        f"{page},{column},{parts[0]},{x0:.2f},{y0:.2f},{parts[1]},{parts[2]},{parts[3]},{parts[4]}"
+                    )
+            if mode in {DebugMode.all, DebugMode.annotate}:
+                annotated_path = pdf_path.with_name(f"{pdf_path.stem}_annotated.pdf")
+                annotate_pdf_blocks(pdf_path, annotated_path)
+                outputs.append(f"annotated_pdf={annotated_path}")
         debug_output = "\n".join(outputs)
         if output is None:
             print(debug_output)
