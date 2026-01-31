@@ -91,8 +91,11 @@ def parse_itau(
         "-s",
         help="Sort output (format: '<column> <ASC|DESC>').",
     ),
+    merge: bool = typer.Option(
+        False, "--merge", "-m", help="Merge multiple PDFs into one CSV output."
+    ),
     locale: Locale = typer.Option(
-        Locale.en_us, "--locale", "-l", help="Output locale (en or pt-br)."
+        Locale.en_us, "--locale", "-l", help="Output locale (en-us or pt-br)."
     ),
     no_headers: bool = typer.Option(
         False, "--no-headers", "-n", help="Do not print CSV headers."
@@ -156,26 +159,12 @@ def parse_itau(
             except ValueError as exc:
                 raise typer.BadParameter(f"Invalid total: {total}") from exc
 
-    for pdf_path in pdf_paths:
-        resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
-        payment_date = extract_vencimento_date(pdf_path)
-        text_blocks = extract_blocks(pdf_path)
-        statements = blocks_to_statements(text_blocks, resolved_year, payment_date)
-        expected_total = (
-            manual_total if manual_total is not None else extract_total_from_pdf(pdf_path)
-        )
+    if len(pdf_paths) > 1 and output is not None and not merge:
+        raise typer.BadParameter("Use --merge when specifying --output with multiple PDFs.")
 
-        if expected_total is None:
-            total_missing.append(str(pdf_path))
-        else:
-            try:
-                check_total(statements, expected_total)
-            except ValueError as exc:
-                total_mismatches.append(f"{pdf_path}: {exc}")
-
-        all_rows.extend(flip_sign_last_column(statements))
-
-    if sort:
+    def sort_rows(rows: list[str]) -> list[str]:
+        if not sort:
+            return rows
         parts = sort.strip().split()
         if len(parts) == 1:
             column, direction = parts[0].lower(), "asc"
@@ -214,17 +203,53 @@ def parse_itau(
                 return float(fields[4])
             return row
 
-        all_rows = sorted(all_rows, key=sort_key, reverse=direction == "desc")
+        return sorted(rows, key=sort_key, reverse=direction == "desc")
 
-    all_rows = localize_rows(all_rows, locale.value)
-
-    if output is None:
-        write_csv_lines(all_rows, output, include_headers=not no_headers)
-    else:
-        added = write_csv_lines_idempotent(
-            all_rows, output, include_headers=not no_headers
+    for pdf_path in pdf_paths:
+        resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
+        payment_date = extract_vencimento_date(pdf_path)
+        text_blocks = extract_blocks(pdf_path)
+        statements = blocks_to_statements(text_blocks, resolved_year, payment_date)
+        expected_total = (
+            manual_total if manual_total is not None else extract_total_from_pdf(pdf_path)
         )
-        typer.echo(f"Wrote {added} new rows to {output}")
+
+        if expected_total is None:
+            total_missing.append(str(pdf_path))
+        else:
+            try:
+                check_total(statements, expected_total)
+            except ValueError as exc:
+                total_mismatches.append(f"{pdf_path}: {exc}")
+
+        rows = flip_sign_last_column(statements)
+
+        if merge:
+            all_rows.extend(rows)
+        else:
+            rows = sort_rows(rows)
+            rows = localize_rows(rows, locale.value)
+            if output is None:
+                per_file_output = pdf_path.with_suffix(".csv")
+                write_csv_lines(rows, per_file_output, include_headers=not no_headers)
+                typer.echo(f"Wrote {len(rows)} rows to {per_file_output}")
+            else:
+                added = write_csv_lines_idempotent(
+                    rows, output, include_headers=not no_headers
+                )
+                typer.echo(f"Wrote {added} new rows to {output}")
+
+    if merge:
+        if sort:
+            all_rows = sort_rows(all_rows)
+        all_rows = localize_rows(all_rows, locale.value)
+        if output is None:
+            write_csv_lines(all_rows, output, include_headers=not no_headers)
+        else:
+            added = write_csv_lines_idempotent(
+                all_rows, output, include_headers=not no_headers
+            )
+            typer.echo(f"Wrote {added} new rows to {output}")
 
     if total_mismatches:
         typer.echo("Warning: total mismatches found:", err=True)
