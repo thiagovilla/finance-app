@@ -24,6 +24,8 @@ from finance_cli.itau import (
     write_csv_lines_idempotent,
     parse_brl_amount,
     annotate_pdf_blocks,
+    CSV_HEADERS,
+    CSV_HEADERS_ENHANCED,
 )
 from finance_cli.nu import convert_date_format
 
@@ -106,6 +108,9 @@ def parse_itau(
     no_headers: bool = typer.Option(
         False, "--no-headers", "-n", help="Do not print CSV headers."
     ),
+    enhanced: bool = typer.Option(
+        False, "--enhanced", "-e", help="Capture category/location when available."
+    ),
     output: Path | None = typer.Option(
         None, "--output", "-o", help="Write output CSV (default: stdout)."
     ),
@@ -148,19 +153,29 @@ def parse_itau(
                 payment_date = extract_vencimento_date(pdf_path)
                 blocks = extract_blocks_with_layout(pdf_path)
                 statements = blocks_to_statements_with_layout(
-                    blocks, resolved_year, payment_date
+                    blocks, resolved_year, payment_date, enhanced=enhanced
                 )
-                outputs.append(
-                    "page,column,index,x0,y0,transaction_date,payment_date,description,amount"
-                )
+                if enhanced:
+                    outputs.append(
+                        "page,column,index,x0,y0,transaction_date,payment_date,description,amount,category,location"
+                    )
+                else:
+                    outputs.append(
+                        "page,column,index,x0,y0,transaction_date,payment_date,description,amount"
+                    )
                 for index, page, column, x0, y0, row in statements:
-                    parts = row.split(",", 4)
-                    if len(parts) != 5:
+                    parts = row.split(",", 6)
+                    if len(parts) < 5:
                         outputs.append(f"{page},{column},{index},{x0:.2f},{y0:.2f},{row}")
                         continue
-                    outputs.append(
-                        f"{page},{column},{parts[0]},{x0:.2f},{y0:.2f},{parts[1]},{parts[2]},{parts[3]},{parts[4]}"
-                    )
+                    if enhanced:
+                        outputs.append(
+                            f"{page},{column},{parts[0]},{x0:.2f},{y0:.2f},{parts[1]},{parts[2]},{parts[3]},{parts[4]},{parts[5] if len(parts) > 5 else ''},{parts[6] if len(parts) > 6 else ''}"
+                        )
+                    else:
+                        outputs.append(
+                            f"{page},{column},{parts[0]},{x0:.2f},{y0:.2f},{parts[1]},{parts[2]},{parts[3]},{parts[4]}"
+                        )
             if mode in {DebugMode.all, DebugMode.annotate}:
                 annotated_path = pdf_path.with_name(f"{pdf_path.stem}_annotated.pdf")
                 annotate_pdf_blocks(pdf_path, annotated_path)
@@ -216,8 +231,8 @@ def parse_itau(
             )
 
         def sort_key(row: str):
-            fields = row.split(",", 4)
-            if len(fields) != 5:
+            fields = row.split(",", 6)
+            if len(fields) < 5:
                 return row
             if column == "index":
                 return int(fields[0])
@@ -237,7 +252,9 @@ def parse_itau(
         resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
         payment_date = extract_vencimento_date(pdf_path)
         text_blocks = extract_blocks(pdf_path)
-        statements = blocks_to_statements(text_blocks, resolved_year, payment_date)
+        statements = blocks_to_statements(
+            text_blocks, resolved_year, payment_date, enhanced=enhanced
+        )
         expected_total = (
             manual_total if manual_total is not None else extract_total_from_pdf(pdf_path)
         )
@@ -260,11 +277,15 @@ def parse_itau(
             rows = localize_rows(rows, locale.value)
             if output is None:
                 per_file_output = pdf_path.with_suffix(".csv")
-                write_csv_lines(rows, per_file_output, include_headers=not no_headers)
+                headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS
+                write_csv_lines(
+                    rows, per_file_output, include_headers=not no_headers, headers=headers
+                )
                 typer.echo(f"Wrote {len(rows)} rows to {per_file_output}")
             else:
+                headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS
                 added = write_csv_lines_idempotent(
-                    rows, output, include_headers=not no_headers
+                    rows, output, include_headers=not no_headers, headers=headers
                 )
                 typer.echo(f"Wrote {added} new rows to {output}")
 
@@ -274,10 +295,14 @@ def parse_itau(
         all_rows = apply_id_schema(all_rows, locale.value)
         all_rows = localize_rows(all_rows, locale.value)
         if output is None:
-            write_csv_lines(all_rows, output, include_headers=not no_headers)
+            headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS
+            write_csv_lines(
+                all_rows, output, include_headers=not no_headers, headers=headers
+            )
         else:
+            headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS
             added = write_csv_lines_idempotent(
-                all_rows, output, include_headers=not no_headers
+                all_rows, output, include_headers=not no_headers, headers=headers
             )
             typer.echo(f"Wrote {added} new rows to {output}")
 

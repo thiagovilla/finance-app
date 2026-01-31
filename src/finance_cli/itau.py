@@ -16,6 +16,7 @@ TOTAL_PATTERNS = (
     r"Total\s+da\s+fatura(?!\s+anterior)\s*\n?\s*(?:R\$)?\s*([\d\.]+,\d{2})",
 )
 CSV_HEADERS = ["id", "transaction_date", "payment_date", "description", "amount"]
+CSV_HEADERS_ENHANCED = CSV_HEADERS + ["category", "location"]
 
 
 @dataclass(frozen=True)
@@ -355,6 +356,160 @@ def _parse_statements_from_lines(
     return index
 
 
+def _parse_block_with_metadata(
+    block: str, year: str, payment_date: str | None, index: int
+) -> tuple[list[str], int]:
+    normalized_block = re.sub(
+        r"(?m)^(\d{1,2})/(\d)\s+(\d)$",
+        r"\1/\2\3",
+        block,
+    )
+    lines = [line for line in normalized_block.splitlines() if line.strip()]
+    statements: list[dict[str, str | None]] = []
+    pending: list[int] = []
+    current: dict[str, str | None] | None = None
+    i = 0
+    while i < len(lines):
+        raw_line = lines[i].strip()
+        normalized = re.sub(r"\s+", "", raw_line)
+        if re.match(r"^\d{1,2}/\d{1,2}$", normalized):
+            if current and not current.get("amount"):
+                current = None
+            if current is None:
+                current = {
+                    "date": normalized,
+                    "desc": "",
+                    "installment": None,
+                    "amount": None,
+                    "category": "",
+                    "location": "",
+                }
+            i += 1
+            continue
+
+        if current and not current.get("amount"):
+            if re.match(r"^-?\d+,\d{2}$", normalized):
+                current["amount"] = normalized
+                statements.append(current)
+                pending.append(len(statements) - 1)
+                current = None
+                i += 1
+                continue
+
+            if re.match(r"^\d{1,2}/\d{1,2}$", normalized):
+                k = i + 1
+                while k < len(lines) and not lines[k].strip():
+                    k += 1
+                if k < len(lines):
+                    next_norm = re.sub(r"\s+", "", lines[k])
+                    if re.match(r"^-?\d+,\d{2}$", next_norm):
+                        current["installment"] = normalized
+                        current["amount"] = next_norm
+                        statements.append(current)
+                        pending.append(len(statements) - 1)
+                        current = None
+                        i = k + 1
+                        continue
+
+            current["desc"] = (
+                f"{current['desc']} {raw_line}".strip()
+                if current["desc"]
+                else raw_line
+            )
+            i += 1
+            continue
+
+        if pending:
+            if len(raw_line.split()) >= 2:
+                parts = raw_line.rsplit(" ", 1)
+                category = parts[0].strip()
+                location = parts[1].strip()
+                stmt_index = pending.pop(0)
+                statements[stmt_index]["category"] = category
+                statements[stmt_index]["location"] = location
+            i += 1
+            continue
+
+        i += 1
+
+    output_rows: list[str] = []
+    for statement in statements:
+        if not statement.get("amount") or not statement.get("desc") or not statement.get("date"):
+            continue
+        date_line = statement["date"] or ""
+        desc_line = statement["desc"] or ""
+        installment_line = statement["installment"]
+        amount_line = statement["amount"] or ""
+        if installment_line:
+            match = f"{date_line}\n{desc_line}\n{installment_line}\n{amount_line}"
+        else:
+            match = f"{date_line}\n{desc_line}\n{amount_line}"
+        payment_field = payment_date or ""
+        date_part, description, amount = match_to_csv(match, year).split(",", 2)
+        category = statement["category"] or ""
+        location = statement["location"] or ""
+        output_rows.append(
+            f"{index},{date_part},{payment_field},{description},{amount},{category},{location}"
+        )
+        index += 1
+    return output_rows, index
+
+
+def _parse_block_basic(
+    block: str, year: str, payment_date: str | None, index: int
+) -> tuple[list[str], int]:
+    normalized_block = re.sub(
+        r"(?m)^(\d{1,2})/(\d)\s+(\d)$",
+        r"\1/\2\3",
+        block,
+    )
+    lines = [line for line in normalized_block.splitlines() if line.strip()]
+    output_rows: list[str] = []
+    i = 0
+    while i < len(lines):
+        date_line = re.sub(r"\s+", "", lines[i])
+        if not re.match(r"^\d{1,2}/\d{1,2}$", date_line):
+            i += 1
+            continue
+        j = i + 1
+        desc_lines: list[str] = []
+        installment_line = None
+        amount_line = None
+        while j < len(lines):
+            candidate = lines[j].strip()
+            candidate_norm = re.sub(r"\s+", "", candidate)
+            if re.match(r"^-?\d+,\d{2}$", candidate_norm):
+                amount_line = candidate_norm
+                break
+            if re.match(r"^\d{1,2}/\d{1,2}$", candidate_norm):
+                k = j + 1
+                while k < len(lines) and not lines[k].strip():
+                    k += 1
+                if k < len(lines):
+                    next_norm = re.sub(r"\s+", "", lines[k])
+                    if re.match(r"^-?\d+,\d{2}$", next_norm):
+                        installment_line = candidate_norm
+                        amount_line = next_norm
+                        j = k
+                        break
+            desc_lines.append(candidate)
+            j += 1
+        if amount_line and desc_lines:
+            if installment_line:
+                desc_lines.append(installment_line)
+            match = f"{date_line}\n{' '.join(desc_lines)}\n{amount_line}"
+            payment_field = payment_date or ""
+            date_part, description, amount = match_to_csv(match, year).split(",", 2)
+            output_rows.append(
+                f"{index},{date_part},{payment_field},{description},{amount}"
+            )
+            index += 1
+            i = j + 1
+        else:
+            i += 1
+    return output_rows, index
+
+
 def _iter_page_blocks(
     pdf_path: Path,
 ) -> Iterable[
@@ -504,7 +659,10 @@ def extract_vencimento_date(pdf_path: Path) -> str | None:
 
 
 def blocks_to_statements(
-    blocks: Iterable[str], year: str, payment_date: str | None
+    blocks: Iterable[str],
+    year: str,
+    payment_date: str | None,
+    enhanced: bool = False,
 ) -> list[str]:
     """Process text blocks to extract raw statement entries.
 
@@ -513,81 +671,42 @@ def blocks_to_statements(
     statements: list[str] = []
     index = 0
     for block in blocks:
-        normalized_block = re.sub(
-            r"(?m)^(\d{1,2})/(\d)\s+(\d)$",
-            r"\1/\2\3",
-            block,
-        )
-        lines = [line for line in normalized_block.splitlines() if line.strip()]
-        i = 0
-        while i < len(lines):
-            date_line = re.sub(r"\s+", "", lines[i])
-            if not re.match(r"^\d{1,2}/\d{1,2}$", date_line):
-                i += 1
-                continue
-            j = i + 1
-            desc_lines: list[str] = []
-            installment_line = None
-            amount_line = None
-            while j < len(lines):
-                candidate = lines[j].strip()
-                candidate_norm = re.sub(r"\s+", "", candidate)
-                if re.match(r"^-?\d+,\d{2}$", candidate_norm):
-                    amount_line = candidate_norm
-                    break
-                if re.match(r"^\d{1,2}/\d{1,2}$", candidate_norm):
-                    k = j + 1
-                    while k < len(lines) and not lines[k].strip():
-                        k += 1
-                    if k < len(lines):
-                        next_norm = re.sub(r"\s+", "", lines[k])
-                        if re.match(r"^-?\d+,\d{2}$", next_norm):
-                            installment_line = candidate_norm
-                            amount_line = next_norm
-                            j = k
-                            break
-                desc_lines.append(candidate)
-                j += 1
-            if amount_line and desc_lines:
-                if installment_line:
-                    desc_lines.append(installment_line)
-                match = f"{date_line}\n{' '.join(desc_lines)}\n{amount_line}"
-                payment_field = payment_date or ""
-                date_part, description, amount = match_to_csv(match, year).split(",", 2)
-                statements.append(
-                    f"{index},{date_part},{payment_field},{description},{amount}"
-                )
-                index += 1
-                i = j + 1
-            else:
-                i += 1
+        if enhanced:
+            parsed, index = _parse_block_with_metadata(block, year, payment_date, index)
+        else:
+            parsed, index = _parse_block_basic(block, year, payment_date, index)
+        statements.extend(parsed)
     return statements
 
 
 def blocks_to_statements_with_layout(
-    blocks: Iterable[BlockInfo], year: str, payment_date: str | None
+    blocks: Iterable[BlockInfo],
+    year: str,
+    payment_date: str | None,
+    enhanced: bool = False,
 ) -> list[tuple[int, int, str, float, float, str]]:
     """Process text blocks with layout metadata into statement entries."""
-    dd_mm_pattern = re.compile(
-        r"(^[\d\s]{1,2}/[\d\s]{1,2}\n.+\n(?:[\d\s]{1,2}/[\d\s]{1,2}\n)?\s*-?\s*\d+,\d{2}$)",
-        re.MULTILINE,
-    )
     statements: list[tuple[int, int, str, float, float, str]] = []
     index = 0
     for block in blocks:
-        normalized_block = re.sub(
-            r"(?m)^(\d{1,2})/(\d)\s+(\d)$",
-            r"\1/\2\3",
-            block.text,
-        )
-        for match in dd_mm_pattern.findall(normalized_block):
-            payment_field = payment_date or ""
-            date_part, description, amount = match_to_csv(match, year).split(",", 2)
-            row = f"{index},{date_part},{payment_field},{description},{amount}"
-            statements.append(
-                (index, block.page, block.column, block.x0, block.y0, row)
+        if enhanced:
+            parsed, index = _parse_block_with_metadata(
+                block.text, year, payment_date, index
             )
-            index += 1
+        else:
+            parsed, index = _parse_block_basic(block.text, year, payment_date, index)
+        for row in parsed:
+            row_index = row.split(",", 1)[0]
+            statements.append(
+                (
+                    int(row_index),
+                    block.page,
+                    block.column,
+                    block.x0,
+                    block.y0,
+                    row,
+                )
+            )
     return statements
 
 
@@ -644,10 +763,13 @@ def flip_sign_last_column(csv_data: Iterable[str]) -> list[str]:
     """Flip the sign of the amount column for each CSV row."""
     new_data = []
     for row in csv_data:
-        columns = row.split(",")
+        columns = row.split(",", 6)
+        if len(columns) < 5:
+            new_data.append(row)
+            continue
         try:
-            last_value = float(columns[-1].replace(",", "."))
-            columns[-1] = str(last_value * -1)
+            amount_value = float(columns[4].replace(",", "."))
+            columns[4] = str(amount_value * -1)
         except ValueError:
             pass
         new_data.append(",".join(columns))
@@ -658,16 +780,17 @@ def localize_rows(rows: Iterable[str], locale: str) -> list[str]:
     """Localize date and amount columns for output."""
     localized: list[str] = []
     for row in rows:
-        parts = row.split(",", 4)
-        if len(parts) != 5:
+        parts = row.split(",", 6)
+        if len(parts) < 5:
             localized.append(row)
             continue
-        row_id, transaction_date, payment_date, description, amount = parts
+        row_id, transaction_date, payment_date, description, amount = parts[:5]
+        extra = parts[5:] if len(parts) > 5 else []
         transaction_date = format_date_for_locale(transaction_date, locale)
         payment_date = format_date_for_locale(payment_date, locale)
         amount = format_amount_for_locale(amount, locale)
         localized.append(
-            ",".join([row_id, transaction_date, payment_date, description, amount])
+            ",".join([row_id, transaction_date, payment_date, description, amount] + extra)
         )
     return localized
 
@@ -707,11 +830,12 @@ def apply_id_schema(rows: Iterable[str], locale: str) -> list[str]:
     months = month_map.get(locale, month_map["en-us"])
     output: list[str] = []
     for row in rows:
-        parts = row.split(",", 4)
-        if len(parts) != 5:
+        parts = row.split(",", 6)
+        if len(parts) < 5:
             output.append(row)
             continue
-        index, transaction_date, payment_date, description, amount = parts
+        index, transaction_date, payment_date, description, amount = parts[:5]
+        extra = parts[5:] if len(parts) > 5 else []
         try:
             parsed = datetime.strptime(transaction_date, "%d/%m/%y")
             year = parsed.strftime("%Y")
@@ -725,7 +849,7 @@ def apply_id_schema(rows: Iterable[str], locale: str) -> list[str]:
             index_int = 0
         row_id = f"{year}-{month}-{index_int + 1}"
         output.append(
-            ",".join([row_id, transaction_date, payment_date, description, amount])
+            ",".join([row_id, transaction_date, payment_date, description, amount] + extra)
         )
     return output
 
@@ -746,12 +870,16 @@ def check_total(csv_data: Iterable[str], expected_total: float) -> None:
 
 
 def write_csv_lines(
-    rows: Iterable[str], output_path: Path | None, include_headers: bool = True
+    rows: Iterable[str],
+    output_path: Path | None,
+    include_headers: bool = True,
+    headers: list[str] | None = None,
 ) -> None:
     """Write CSV rows to stdout or a file."""
+    headers = headers or CSV_HEADERS
     if output_path is None:
         if include_headers:
-            print(",".join(CSV_HEADERS))
+            print(",".join(headers))
         for line in rows:
             print(line)
         return
@@ -759,37 +887,42 @@ def write_csv_lines(
     with output_path.open("w", newline="", encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile)
         if include_headers:
-            writer.writerow(CSV_HEADERS)
+            writer.writerow(headers)
         for row in rows:
             writer.writerow(row.split(","))
 
 
-def load_existing_rows(output_path: Path) -> set[str]:
+def load_existing_rows(output_path: Path, headers: list[str] | None = None) -> set[str]:
     """Load existing rows from a CSV file, excluding headers."""
     if not output_path.exists():
         return set()
 
+    headers = headers or CSV_HEADERS
     with output_path.open("r", newline="", encoding="utf-8") as csvfile:
         reader = csv.reader(csvfile)
         return {
             ",".join(row)
             for row in reader
-            if row and row != CSV_HEADERS
+            if row and row != headers
         }
 
 
 def write_csv_lines_idempotent(
-    rows: Iterable[str], output_path: Path, include_headers: bool = True
+    rows: Iterable[str],
+    output_path: Path,
+    include_headers: bool = True,
+    headers: list[str] | None = None,
 ) -> int:
     """Append rows to a CSV file, skipping rows already present."""
-    existing_rows = load_existing_rows(output_path)
+    headers = headers or CSV_HEADERS
+    existing_rows = load_existing_rows(output_path, headers=headers)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     added = 0
     with output_path.open("a", newline="", encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile)
         if include_headers and (not output_path.exists() or output_path.stat().st_size == 0):
-            writer.writerow(CSV_HEADERS)
+            writer.writerow(headers)
         for row in rows:
             if row in existing_rows:
                 continue

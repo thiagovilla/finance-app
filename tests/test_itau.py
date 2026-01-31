@@ -44,6 +44,20 @@ def test_blocks_to_statements_handles_multiline_description() -> None:
     assert result == ["0,24/11/25,,EBN *SPOTIFYCUR,23.90"]
 
 
+def test_blocks_to_statements_captures_category_location_enhanced() -> None:
+    block = (
+        "25/11\nAzul Linhas Aereas BraB\n156,60\n"
+        "19/1 1\nNOEL LAZA RO TAUFIC CINL\n20,00\n"
+        "AIRLINE BARUERI\n"
+        "lazer LEME\n"
+    )
+    result = blocks_to_statements([block], "25", None, enhanced=True)
+    assert result == [
+        "0,25/11/25,,Azul Linhas Aereas BraB,156.60,AIRLINE,BARUERI",
+        "1,19/11/25,,NOEL LAZA RO TAUFIC CINL,20.00,lazer,LEME",
+    ]
+
+
 def test_blocks_to_statements_handles_spaced_date() -> None:
     block = "19/1 2\nPOSTO SAO JOSELEMEBRA\n  5,00"
     result = blocks_to_statements([block], "24", None)
@@ -52,7 +66,10 @@ def test_blocks_to_statements_handles_spaced_date() -> None:
 
 
 def test_flip_sign_last_column() -> None:
-    rows = ["0,01/02/24,,Coffee,10.00", "1,02/02/24,,Refund,-5.00"]
+    rows = [
+        "0,01/02/24,,Coffee,10.00",
+        "1,02/02/24,,Refund,-5.00",
+    ]
     assert flip_sign_last_column(rows) == [
         "0,01/02/24,,Coffee,-10.0",
         "1,02/02/24,,Refund,5.0",
