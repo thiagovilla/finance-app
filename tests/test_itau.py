@@ -19,22 +19,47 @@ def test_match_to_csv_inserts_year_and_normalizes() -> None:
 
 def test_blocks_to_statements_extracts_lines() -> None:
     block = "01/02\nCoffee\n  10,00\n\n05/02\nMarket\n  20,50"
-    result = blocks_to_statements([block], "24")
-    assert result == ["01/02/24,Coffee,10.00", "05/02/24,Market,20.50"]
+    result = blocks_to_statements([block], "24", None)
+    assert result == [
+        "0,01/02/24,,Coffee,10.00",
+        "1,05/02/24,,Market,20.50",
+    ]
+
+
+def test_blocks_to_statements_normalizes_spaced_date_line() -> None:
+    block = "19/1 2\nPOSTO SAO JOSELEMEBRA\n  5,00"
+    result = blocks_to_statements([block], "24", None)
+    assert result == ["0,19/12/24,,POSTO SAO JOSELEMEBRA,5.00"]
+
+
+def test_blocks_to_statements_handles_installment_line() -> None:
+    block = "15/01\nDELL\n12/12\n61,75"
+    result = blocks_to_statements([block], "24", None)
+    assert result == ["0,15/01/24,,DELL 12/12,61.75"]
+
+
+def test_blocks_to_statements_handles_spaced_date() -> None:
+    block = "19/1 2\nPOSTO SAO JOSELEMEBRA\n  5,00"
+    result = blocks_to_statements([block], "24", None)
+    assert result == ["0,19/12/24,,POSTO SAO JOSELEMEBRA,5.00"]
+
 
 
 def test_flip_sign_last_column() -> None:
-    rows = ["01/02/24,Coffee,10.00", "02/02/24,Refund,-5.00"]
-    assert flip_sign_last_column(rows) == ["01/02/24,Coffee,-10.0", "02/02/24,Refund,5.0"]
+    rows = ["0,01/02/24,,Coffee,10.00", "1,02/02/24,,Refund,-5.00"]
+    assert flip_sign_last_column(rows) == [
+        "0,01/02/24,,Coffee,-10.0",
+        "1,02/02/24,,Refund,5.0",
+    ]
 
 
 def test_check_total_ok() -> None:
-    rows = ["01/02/24,Coffee,10.00", "02/02/24,Market,5.50"]
+    rows = ["0,01/02/24,,Coffee,10.00", "1,02/02/24,,Market,5.50"]
     check_total(rows, 15.5)
 
 
 def test_check_total_mismatch() -> None:
-    rows = ["01/02/24,Coffee,10.00", "02/02/24,Market,5.50"]
+    rows = ["0,01/02/24,,Coffee,10.00", "1,02/02/24,,Market,5.50"]
     with pytest.raises(ValueError, match="Total mismatch"):
         check_total(rows, 10.0)
 
@@ -48,11 +73,23 @@ def test_find_total_in_text_picks_last_match() -> None:
     assert find_total_in_text(text) == 10532.52
 
 
+def test_find_total_in_text_handles_spaced_label() -> None:
+    text = (
+        "O tota l da sua fatura e:\n"
+        "Com vencimento em:\n"
+        "Limite total de credito:\n"
+        "R$ 9.356,73\n"
+        "06/01/2026\n"
+        "R$ 18.412,00\n"
+    )
+    assert find_total_in_text(text) == 9356.73
+
+
 def test_write_csv_lines_idempotent(tmp_path) -> None:
     output_path = tmp_path / "itau.csv"
-    rows = ["01/02/24,Coffee,-10.0", "02/02/24,Market,-5.0"]
-    added_first = write_csv_lines_idempotent(rows, output_path)
-    added_second = write_csv_lines_idempotent(rows, output_path)
+    rows = ["0,01/02/24,,Coffee,-10.0", "1,02/02/24,,Market,-5.0"]
+    added_first = write_csv_lines_idempotent(rows, output_path, include_headers=False)
+    added_second = write_csv_lines_idempotent(rows, output_path, include_headers=False)
 
     assert added_first == 2
     assert added_second == 0
