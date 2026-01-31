@@ -1,0 +1,33 @@
+Metadata-Version: 2.4
+Name: finances-app
+Version: 0.1.0
+Summary: Personal finance CLI for parsing statements
+Author: Thiago
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: pandas>=2.2
+Requires-Dist: pymupdf>=1.24
+Requires-Dist: typer>=0.12
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3; extra == "dev"
+Requires-Dist: ruff>=0.6; extra == "dev"
+
+# finances-app
+
+Personal finance CLI that parses statements and produces CSV output.
+
+## Quickstart
+
+- Create a virtual env and install deps with uv:
+
+```bash
+uv venv
+source .venv/bin/activate
+uv pip install -e .
+```
+
+- Run the CLI:
+
+```bash
+finance --help
+```
