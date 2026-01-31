@@ -33,6 +33,12 @@ def test_blocks_to_statements_normalizes_spaced_date_line() -> None:
     assert result == ["0,19/12/24,,POSTO SAO JOSELEMEBRA,5.00"]
 
 
+def test_blocks_to_statements_handles_thousands_amount() -> None:
+    block = "22/12\nCASASBA*CASAS BAHIA\n- 2.249,00"
+    result = blocks_to_statements([block], "24", None)
+    assert result == ["0,22/12/24,,CASASBA*CASAS BAHIA,-2249.00"]
+
+
 def test_blocks_to_statements_handles_installment_line() -> None:
     block = "15/01\nDELL\n12/12\n61,75"
     result = blocks_to_statements([block], "24", None)

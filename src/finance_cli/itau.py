@@ -351,8 +351,8 @@ def _parse_statements_from_lines(
             if k >= len(lines):
                 break
             amount_line = lines[k]
-        amount_text = re.sub(r"\s+", "", amount_line.text)
-        if not re.match(r"^-?\d+,\d{2}$", amount_text):
+        amount_text = _normalize_amount_text(amount_line.text)
+        if amount_text is None:
             i += 1
             continue
         if installment_line is None:
@@ -366,6 +366,17 @@ def _parse_statements_from_lines(
         index += 1
         i = k + 1
     return index
+
+
+def _normalize_amount_text(value: str) -> str | None:
+    cleaned = re.sub(r"\s+", "", value)
+    if not cleaned:
+        return None
+    if not re.match(r"^-?\d{1,3}(?:\.\d{3})*,\d{2}$", cleaned) and not re.match(
+        r"^-?\d+,\d{2}$", cleaned
+    ):
+        return None
+    return cleaned.replace(".", "")
 
 
 def _parse_block_with_metadata(
@@ -400,13 +411,14 @@ def _parse_block_with_metadata(
             continue
 
         if current and not current.get("amount"):
-            if re.match(r"^-?\d+,\d{2}$", normalized):
-                current["amount"] = normalized
-                statements.append(current)
-                pending.append(len(statements) - 1)
-                current = None
-                i += 1
-                continue
+            amount_text = _normalize_amount_text(raw_line)
+        if amount_text is not None:
+            current["amount"] = amount_text
+            statements.append(current)
+            pending.append(len(statements) - 1)
+            current = None
+            i += 1
+            continue
 
             if re.match(r"^\d{1,2}/\d{1,2}$", normalized):
                 k = i + 1
@@ -414,9 +426,10 @@ def _parse_block_with_metadata(
                     k += 1
                 if k < len(lines):
                     next_norm = re.sub(r"\s+", "", lines[k])
-                    if re.match(r"^-?\d+,\d{2}$", next_norm):
+                    amount_text = _normalize_amount_text(lines[k])
+                    if amount_text is not None:
                         current["installment"] = normalized
-                        current["amount"] = next_norm
+                        current["amount"] = amount_text
                         statements.append(current)
                         pending.append(len(statements) - 1)
                         current = None
@@ -490,18 +503,19 @@ def _parse_block_basic(
         while j < len(lines):
             candidate = lines[j].strip()
             candidate_norm = re.sub(r"\s+", "", candidate)
-            if re.match(r"^-?\d+,\d{2}$", candidate_norm):
-                amount_line = candidate_norm
+            amount_text = _normalize_amount_text(candidate)
+            if amount_text is not None:
+                amount_line = amount_text
                 break
             if re.match(r"^\d{1,2}/\d{1,2}$", candidate_norm):
                 k = j + 1
                 while k < len(lines) and not lines[k].strip():
                     k += 1
                 if k < len(lines):
-                    next_norm = re.sub(r"\s+", "", lines[k])
-                    if re.match(r"^-?\d+,\d{2}$", next_norm):
+                    next_amount = _normalize_amount_text(lines[k])
+                    if next_amount is not None:
                         installment_line = candidate_norm
-                        amount_line = next_norm
+                        amount_line = next_amount
                         j = k
                         break
             desc_lines.append(candidate)
