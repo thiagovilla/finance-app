@@ -18,6 +18,7 @@ from finance_cli.itau import (
     extract_vencimento_date,
     flip_sign_last_column,
     localize_rows,
+    apply_id_schema,
     check_total,
     write_csv_lines,
     write_csv_lines_idempotent,
@@ -109,7 +110,7 @@ def parse_itau(
         None, "--output", "-o", help="Write output CSV (default: stdout)."
     ),
 ) -> None:
-    """Parse Itaú credit card PDF(s) into CSV lines."""
+    """Parse Itaú credit card PDF(s) into CSV lines (id: YYYY-MMM-index)."""
     debug_mode = DebugMode.all
     if debug and input_paths:
         first = input_paths[0].lower()
@@ -255,6 +256,7 @@ def parse_itau(
             all_rows.extend(rows)
         else:
             rows = sort_rows(rows)
+            rows = apply_id_schema(rows, locale.value)
             rows = localize_rows(rows, locale.value)
             if output is None:
                 per_file_output = pdf_path.with_suffix(".csv")
@@ -269,6 +271,7 @@ def parse_itau(
     if merge:
         if sort:
             all_rows = sort_rows(all_rows)
+        all_rows = apply_id_schema(all_rows, locale.value)
         all_rows = localize_rows(all_rows, locale.value)
         if output is None:
             write_csv_lines(all_rows, output, include_headers=not no_headers)

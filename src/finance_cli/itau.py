@@ -15,7 +15,7 @@ TOTAL_PATTERNS = (
     r"O\s+total\s+da\s+sua\s+fatura\s+é:\s*\n?\s*R\$\s*([\d\.]+,\d{2})",
     r"Total\s+da\s+fatura(?!\s+anterior)\s*\n?\s*(?:R\$)?\s*([\d\.]+,\d{2})",
 )
-CSV_HEADERS = ["index", "transaction_date", "payment_date", "description", "amount"]
+CSV_HEADERS = ["id", "transaction_date", "payment_date", "description", "amount"]
 
 
 @dataclass(frozen=True)
@@ -662,14 +662,72 @@ def localize_rows(rows: Iterable[str], locale: str) -> list[str]:
         if len(parts) != 5:
             localized.append(row)
             continue
-        index, transaction_date, payment_date, description, amount = parts
+        row_id, transaction_date, payment_date, description, amount = parts
         transaction_date = format_date_for_locale(transaction_date, locale)
         payment_date = format_date_for_locale(payment_date, locale)
         amount = format_amount_for_locale(amount, locale)
         localized.append(
-            ",".join([index, transaction_date, payment_date, description, amount])
+            ",".join([row_id, transaction_date, payment_date, description, amount])
         )
     return localized
+
+
+def apply_id_schema(rows: Iterable[str], locale: str) -> list[str]:
+    """Replace index with an id using YYYY-MMM-(index)."""
+    month_map = {
+        "en-us": [
+            "JAN",
+            "FEB",
+            "MAR",
+            "APR",
+            "MAY",
+            "JUN",
+            "JUL",
+            "AUG",
+            "SEP",
+            "OCT",
+            "NOV",
+            "DEC",
+        ],
+        "pt-br": [
+            "JAN",
+            "FEV",
+            "MAR",
+            "ABR",
+            "MAI",
+            "JUN",
+            "JUL",
+            "AGO",
+            "SET",
+            "OUT",
+            "NOV",
+            "DEZ",
+        ],
+    }
+    months = month_map.get(locale, month_map["en-us"])
+    output: list[str] = []
+    for row in rows:
+        parts = row.split(",", 4)
+        if len(parts) != 5:
+            output.append(row)
+            continue
+        index, transaction_date, payment_date, description, amount = parts
+        try:
+            parsed = datetime.strptime(transaction_date, "%d/%m/%y")
+            year = parsed.strftime("%Y")
+            month = months[parsed.month - 1]
+        except ValueError:
+            year = "0000"
+            month = "UNK"
+        try:
+            index_int = int(index)
+        except ValueError:
+            index_int = 0
+        row_id = f"{year}-{month}-{index_int + 1}"
+        output.append(
+            ",".join([row_id, transaction_date, payment_date, description, amount])
+        )
+    return output
 
 
 def check_total(csv_data: Iterable[str], expected_total: float) -> None:
