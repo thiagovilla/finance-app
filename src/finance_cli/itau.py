@@ -142,36 +142,27 @@ def extract_blocks_with_layout(pdf_path: Path) -> list[BlockInfo]:
 def annotate_pdf_blocks(pdf_path: Path, output_path: Path) -> Path:
     """Write an annotated PDF with line rectangles and coordinates."""
     doc = fitz.open(pdf_path)
-    cm_to_pt = 28.35
-    base_split_x: float | None = None
-    for page_number, page in enumerate(doc, start=1):
+    for page_number, page, split_x in _iter_pages_with_split(doc):
         page_rect = page.rect
-        words = page.get_text("words")
-        split_x = _compute_split_x(words, page_rect)
-        if base_split_x is None:
-            base_split_x = split_x
-        split_x_line = (
-            base_split_x - cm_to_pt if page_number == 1 else base_split_x + cm_to_pt
-        )
         page.draw_line(
-            fitz.Point(split_x_line, page_rect.y0),
-            fitz.Point(split_x_line, page_rect.y1),
+            fitz.Point(split_x, page_rect.y0),
+            fitz.Point(split_x, page_rect.y1),
             color=(0, 0.6, 0),
             width=0.5,
         )
         page.insert_text(
-            fitz.Point(split_x_line + 2, page_rect.y0 + 8),
-            f"split_x={split_x_line:.2f}",
+            fitz.Point(split_x + 2, page_rect.y0 + 8),
+            f"split_x={split_x:.2f}",
             fontsize=7,
             color=(0, 0.6, 0),
         )
-        page_lines = _extract_page_lines(page)
+        page_lines = _extract_page_lines(page, split_x)
         for column, lines in page_lines.items():
             color = (1, 0, 0) if column == "right" else (0, 0, 1)
             for line in lines:
                 rect = fitz.Rect(line.x0, line.y0, line.x1, line.y1)
                 page.draw_rect(rect, color=color, width=0.5)
-                label = f"{column} {line.x0:.2f},{line.y0:.2f},{line.x1:.2f},{line.y1:.2f}"
+                label = f"{line.x0:.2f},{line.y0:.2f}"
                 page.insert_text(
                     fitz.Point(line.x0, max(line.y0 - 4, page_rect.y0 + 6)),
                     label,
@@ -190,28 +181,28 @@ def _normalize_text(text: str) -> str:
 
 
 def _compute_split_x(words: list[tuple], page_rect: fitz.Rect) -> float:
-    centers = sorted((word[0] + word[2]) / 2 for word in words)
-    if len(centers) < 2:
+    x0_values = sorted(word[0] for word in words)
+    if len(x0_values) < 2:
         return page_rect.x0 + (page_rect.width / 2)
     max_gap = 0.0
     split_x = page_rect.x0 + (page_rect.width / 2)
-    prev = centers[0]
-    for current in centers[1:]:
+    prev = x0_values[0]
+    for current in x0_values[1:]:
         gap = current - prev
         if gap > max_gap:
             max_gap = gap
             split_x = (prev + current) / 2
         prev = current
-    min_center = centers[0]
-    max_center = centers[-1]
-    span = max_center - min_center
+    min_x0 = x0_values[0]
+    max_x0 = x0_values[-1]
+    span = max_x0 - min_x0
     if span <= 0:
         return page_rect.x0 + (page_rect.width / 2)
-    min_split = min_center + (span * 0.25)
-    max_split = max_center - (span * 0.25)
+    min_split = min_x0 + (span * 0.25)
+    max_split = max_x0 - (span * 0.25)
     if max_gap >= 20.0 and min_split <= split_x <= max_split:
         return split_x
-    return min_center + (span / 2)
+    return min_x0 + (span / 2)
 
 
 def _group_words_into_lines(words: list[tuple], y_tol: float | None = None) -> list[LineInfo]:
@@ -249,17 +240,14 @@ def _group_words_into_lines(words: list[tuple], y_tol: float | None = None) -> l
     return result
 
 
-def _extract_page_lines(page: fitz.Page) -> dict[str, list[LineInfo]]:
+def _extract_page_lines(page: fitz.Page, split_x: float) -> dict[str, list[LineInfo]]:
     words = page.get_text("words")
     if not words:
         return {"left": [], "right": []}
-    page_rect = page.rect
-    split_x = _compute_split_x(words, page_rect)
     left_words: list[tuple] = []
     right_words: list[tuple] = []
     for word in words:
-        center_x = (word[0] + word[2]) / 2
-        if center_x < split_x:
+        if word[0] < split_x:
             left_words.append(word)
         else:
             right_words.append(word)
@@ -269,10 +257,12 @@ def _extract_page_lines(page: fitz.Page) -> dict[str, list[LineInfo]]:
     }
 
 
-def _iter_page_lines(pdf_path: Path) -> Iterable[tuple[int, dict[str, list[LineInfo]], dict[str, float | None]]]:
+def _iter_page_lines(
+    pdf_path: Path,
+) -> Iterable[tuple[int, dict[str, list[LineInfo]], dict[str, float | None]]]:
     doc = fitz.open(pdf_path)
-    for page_number, page in enumerate(doc, start=1):
-        page_lines = _extract_page_lines(page)
+    for page_number, page, split_x in _iter_pages_with_split(doc):
+        page_lines = _extract_page_lines(page, split_x)
         marker = {"left": None, "right": None}
         for column, lines in page_lines.items():
             for line in lines:
@@ -371,9 +361,8 @@ def _iter_page_blocks(
     tuple[int, list[tuple[str, float, float, float, float, str]], dict[str, float | None]]
 ]:
     doc = fitz.open(pdf_path)
-    for page_number, page in enumerate(doc, start=1):
-        words = page.get_text("words")
-        page_lines = _extract_page_lines(page)
+    for page_number, page, split_x in _iter_pages_with_split(doc):
+        page_lines = _extract_page_lines(page, split_x)
         marker = {"left": None, "right": None}
         for column, lines in page_lines.items():
             for line in lines:
@@ -381,24 +370,38 @@ def _iter_page_blocks(
                     marker[column] = line.y0
                     break
 
-        split_x = _compute_split_x(words, page.rect)
+        left_rect = fitz.Rect(page.rect.x0, page.rect.y0, split_x, page.rect.y1)
+        right_rect = fitz.Rect(split_x, page.rect.y0, page.rect.x1, page.rect.y1)
         page_blocks: list[tuple[str, float, float, float, float, str]] = []
 
-        for block in page.get_text("blocks"):
-            if len(block) < 5:
-                continue
-            text = block[4].strip()
-            if not text:
-                continue
-            x0, y0, x1, y1 = block[0], block[1], block[2], block[3]
-            center_x = (x0 + x1) / 2
-            column = "right" if center_x >= split_x else "left"
-            page_blocks.append((column, y0, x0, x1, y1, text))
+        for column, rect in (("left", left_rect), ("right", right_rect)):
+            for block in page.get_text("blocks", clip=rect):
+                if len(block) < 5:
+                    continue
+                text = block[4].strip()
+                if not text:
+                    continue
+                x0, y0, x1, y1 = block[0], block[1], block[2], block[3]
+                page_blocks.append((column, y0, x0, x1, y1, text))
 
         yield page_number, page_blocks, marker
         if marker["left"] is not None or marker["right"] is not None:
             break
     doc.close()
+
+
+def _iter_pages_with_split(doc: fitz.Document) -> Iterable[tuple[int, fitz.Page, float]]:
+    cm_to_pt = 28.35
+    base_split_x: float | None = None
+    for page_number, page in enumerate(doc, start=1):
+        words = page.get_text("words")
+        split_x = _compute_split_x(words, page.rect)
+        if base_split_x is None:
+            base_split_x = split_x
+        split_x_line = (
+            base_split_x - cm_to_pt if page_number == 1 else base_split_x + cm_to_pt
+        )
+        yield page_number, page, split_x_line
 
 
 def parse_brl_amount(value: str) -> float:
