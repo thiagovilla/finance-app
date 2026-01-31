@@ -412,13 +412,13 @@ def _parse_block_with_metadata(
 
         if current and not current.get("amount"):
             amount_text = _normalize_amount_text(raw_line)
-        if amount_text is not None:
-            current["amount"] = amount_text
-            statements.append(current)
-            pending.append(len(statements) - 1)
-            current = None
-            i += 1
-            continue
+            if amount_text is not None:
+                current["amount"] = amount_text
+                statements.append(current)
+                pending.append(len(statements) - 1)
+                current = None
+                i += 1
+                continue
 
             if re.match(r"^\d{1,2}/\d{1,2}$", normalized):
                 k = i + 1
