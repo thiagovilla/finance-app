@@ -38,6 +38,12 @@ def test_blocks_to_statements_handles_installment_line() -> None:
     assert result == ["0,15/01/24,,DELL 12/12,61.75"]
 
 
+def test_blocks_to_statements_handles_multiline_description() -> None:
+    block = "24/11\nEBN\n*SPOTIFYCUR\n23,90"
+    result = blocks_to_statements([block], "25", None)
+    assert result == ["0,24/11/25,,EBN *SPOTIFYCUR,23.90"]
+
+
 def test_blocks_to_statements_handles_spaced_date() -> None:
     block = "19/1 2\nPOSTO SAO JOSELEMEBRA\n  5,00"
     result = blocks_to_statements([block], "24", None)

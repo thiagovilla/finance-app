@@ -510,10 +510,6 @@ def blocks_to_statements(
 
     Each statement pattern: DD/MM, newline, description, newline, price value.
     """
-    dd_mm_pattern = re.compile(
-        r"(^[\d\s]{1,2}/[\d\s]{1,2}\n.+\n(?:[\d\s]{1,2}/[\d\s]{1,2}\n)?\s*-?\s*\d+,\d{2}$)",
-        re.MULTILINE,
-    )
     statements: list[str] = []
     index = 0
     for block in blocks:
@@ -522,13 +518,49 @@ def blocks_to_statements(
             r"\1/\2\3",
             block,
         )
-        for match in dd_mm_pattern.findall(normalized_block):
-            payment_field = payment_date or ""
-            date_part, description, amount = match_to_csv(match, year).split(",", 2)
-            statements.append(
-                f"{index},{date_part},{payment_field},{description},{amount}"
-            )
-            index += 1
+        lines = [line for line in normalized_block.splitlines() if line.strip()]
+        i = 0
+        while i < len(lines):
+            date_line = re.sub(r"\s+", "", lines[i])
+            if not re.match(r"^\d{1,2}/\d{1,2}$", date_line):
+                i += 1
+                continue
+            j = i + 1
+            desc_lines: list[str] = []
+            installment_line = None
+            amount_line = None
+            while j < len(lines):
+                candidate = lines[j].strip()
+                candidate_norm = re.sub(r"\s+", "", candidate)
+                if re.match(r"^-?\d+,\d{2}$", candidate_norm):
+                    amount_line = candidate_norm
+                    break
+                if re.match(r"^\d{1,2}/\d{1,2}$", candidate_norm):
+                    k = j + 1
+                    while k < len(lines) and not lines[k].strip():
+                        k += 1
+                    if k < len(lines):
+                        next_norm = re.sub(r"\s+", "", lines[k])
+                        if re.match(r"^-?\d+,\d{2}$", next_norm):
+                            installment_line = candidate_norm
+                            amount_line = next_norm
+                            j = k
+                            break
+                desc_lines.append(candidate)
+                j += 1
+            if amount_line and desc_lines:
+                if installment_line:
+                    desc_lines.append(installment_line)
+                match = f"{date_line}\n{' '.join(desc_lines)}\n{amount_line}"
+                payment_field = payment_date or ""
+                date_part, description, amount = match_to_csv(match, year).split(",", 2)
+                statements.append(
+                    f"{index},{date_part},{payment_field},{description},{amount}"
+                )
+                index += 1
+                i = j + 1
+            else:
+                i += 1
     return statements
 
 
