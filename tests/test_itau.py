@@ -1,6 +1,7 @@
 import pytest
 
 from finance_cli.itau import (
+    apply_id_schema,
     blocks_to_statements,
     check_total,
     flip_sign_last_column,
@@ -73,6 +74,13 @@ def test_flip_sign_last_column() -> None:
     assert flip_sign_last_column(rows) == [
         "0,01/02/24,,Coffee,-10.0",
         "1,02/02/24,,Refund,5.0",
+    ]
+
+
+def test_apply_id_schema_uses_payment_date_month() -> None:
+    rows = ["0,01/02/24,15/03/24,Coffee,10.00"]
+    assert apply_id_schema(rows, "en-us") == [
+        "2024-MAR-1,01/02/24,15/03/24,Coffee,10.00"
     ]
 
 

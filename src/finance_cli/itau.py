@@ -3,10 +3,11 @@ from __future__ import annotations
 import csv
 import re
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Iterable
-from dataclasses import dataclass
 
 import fitz  # PyMuPDF
 
@@ -17,6 +18,10 @@ TOTAL_PATTERNS = (
 )
 CSV_HEADERS = ["id", "transaction_date", "payment_date", "description", "amount"]
 CSV_HEADERS_ENHANCED = CSV_HEADERS + ["category", "location"]
+
+class Layout(str, Enum):
+    legacy = "legacy"
+    modern = "modern"
 
 
 @dataclass(frozen=True)
@@ -37,10 +42,10 @@ class LineInfo:
     text: str
 
 
-def extract_blocks(pdf_path: Path) -> list[str]:
-    """Extract text blocks from a PDF, stopping at the installment marker."""
+def extract_blocks(pdf_path: Path, layout: Layout = Layout.modern) -> list[str]:
+    """Extract text blocks from a PDF layout, stopping at the installment marker."""
     blocks: list[str] = []
-    for _, page_blocks, marker in _iter_page_blocks(pdf_path):
+    for _, page_blocks, marker in _iter_page_blocks(pdf_path, layout):
         left_marker_y = marker["left"]
         right_marker_y = marker["right"]
 
@@ -80,10 +85,12 @@ def extract_blocks(pdf_path: Path) -> list[str]:
     return blocks
 
 
-def extract_blocks_with_layout(pdf_path: Path) -> list[BlockInfo]:
-    """Extract text blocks with page/column metadata, stopping at the installment marker."""
+def extract_blocks_with_layout(
+    pdf_path: Path, layout: Layout = Layout.modern
+) -> list[BlockInfo]:
+    """Extract text blocks with page/column metadata for a layout."""
     blocks: list[BlockInfo] = []
-    for page_number, page_blocks, marker in _iter_page_blocks(pdf_path):
+    for page_number, page_blocks, marker in _iter_page_blocks(pdf_path, layout):
         left_marker_y = marker["left"]
         right_marker_y = marker["right"]
 
@@ -140,10 +147,12 @@ def extract_blocks_with_layout(pdf_path: Path) -> list[BlockInfo]:
     return blocks
 
 
-def annotate_pdf_blocks(pdf_path: Path, output_path: Path) -> Path:
-    """Write an annotated PDF with line rectangles and coordinates."""
+def annotate_pdf_blocks(
+    pdf_path: Path, output_path: Path, layout: Layout = Layout.modern
+) -> Path:
+    """Write an annotated PDF with line rectangles and coordinates for a layout."""
     doc = fitz.open(pdf_path)
-    for page_number, page, split_x in _iter_pages_with_split(doc):
+    for page_number, page, split_x in _iter_pages_with_split(doc, layout):
         page_rect = page.rect
         page.draw_line(
             fitz.Point(split_x, page_rect.y0),
@@ -260,9 +269,11 @@ def _extract_page_lines(page: fitz.Page, split_x: float) -> dict[str, list[LineI
 
 def _iter_page_lines(
     pdf_path: Path,
+    layout: Layout = Layout.modern,
 ) -> Iterable[tuple[int, dict[str, list[LineInfo]], dict[str, float | None]]]:
+    """Yield per-page lines using the layout split."""
     doc = fitz.open(pdf_path)
-    for page_number, page, split_x in _iter_pages_with_split(doc):
+    for page_number, page, split_x in _iter_pages_with_split(doc, layout):
         page_lines = _extract_page_lines(page, split_x)
         marker = {"left": None, "right": None}
         for column, lines in page_lines.items():
@@ -290,9 +301,10 @@ def _apply_marker(
     return left_lines, right_lines
 
 
-def _extract_line_blocks(pdf_path: Path) -> list[str]:
+def _extract_line_blocks(pdf_path: Path, layout: Layout = Layout.modern) -> list[str]:
+    """Extract text blocks from line groups using the layout split."""
     blocks: list[str] = []
-    for _, page_lines, marker in _iter_page_lines(pdf_path):
+    for _, page_lines, marker in _iter_page_lines(pdf_path, layout):
         left_lines, right_lines = _apply_marker(page_lines, marker)
         if left_lines:
             blocks.append("\n".join(line.text for line in left_lines))
@@ -512,11 +524,13 @@ def _parse_block_basic(
 
 def _iter_page_blocks(
     pdf_path: Path,
+    layout: Layout = Layout.modern,
 ) -> Iterable[
     tuple[int, list[tuple[str, float, float, float, float, str]], dict[str, float | None]]
 ]:
+    """Yield per-page blocks using the layout split."""
     doc = fitz.open(pdf_path)
-    for page_number, page, split_x in _iter_pages_with_split(doc):
+    for page_number, page, split_x in _iter_pages_with_split(doc, layout):
         page_lines = _extract_page_lines(page, split_x)
         marker = {"left": None, "right": None}
         for column, lines in page_lines.items():
@@ -545,17 +559,26 @@ def _iter_page_blocks(
     doc.close()
 
 
-def _iter_pages_with_split(doc: fitz.Document) -> Iterable[tuple[int, fitz.Page, float]]:
+def _iter_pages_with_split(
+    doc: fitz.Document, layout: Layout = Layout.modern
+) -> Iterable[tuple[int, fitz.Page, float]]:
+    """Yield pages with a split X coordinate based on the layout."""
     cm_to_pt = 28.35
+    split_offsets_cm = {
+        Layout.modern: (-1.0, 1.0),
+        Layout.legacy: (0.0, 1.5),
+    }
+    first_offset_cm, other_offset_cm = split_offsets_cm.get(
+        layout, split_offsets_cm[Layout.modern]
+    )
     base_split_x: float | None = None
     for page_number, page in enumerate(doc, start=1):
         words = page.get_text("words")
         split_x = _compute_split_x(words, page.rect)
         if base_split_x is None:
             base_split_x = split_x
-        split_x_line = (
-            base_split_x - cm_to_pt if page_number == 1 else base_split_x + cm_to_pt
-        )
+        offset_cm = first_offset_cm if page_number == 1 else other_offset_cm
+        split_x_line = base_split_x + (offset_cm * cm_to_pt)
         yield page_number, page, split_x_line
 
 
@@ -711,12 +734,15 @@ def blocks_to_statements_with_layout(
 
 
 def extract_statement_rows_with_layout(
-    pdf_path: Path, year: str, payment_date: str | None
+    pdf_path: Path,
+    year: str,
+    payment_date: str | None,
+    layout: Layout = Layout.modern,
 ) -> list[tuple[int, int, str, float, float, str]]:
-    """Extract statement rows with page/column layout metadata."""
+    """Extract statement rows with page/column metadata using the layout split."""
     statements: list[tuple[int, int, str, float, float, str]] = []
     index = 0
-    for page_number, page_lines, marker in _iter_page_lines(pdf_path):
+    for page_number, page_lines, marker in _iter_page_lines(pdf_path, layout):
         left_lines, right_lines = _apply_marker(page_lines, marker)
         index = _parse_statements_from_lines(
             left_lines, page_number, "left", year, payment_date, statements, index
@@ -836,8 +862,9 @@ def apply_id_schema(rows: Iterable[str], locale: str) -> list[str]:
             continue
         index, transaction_date, payment_date, description, amount = parts[:5]
         extra = parts[5:] if len(parts) > 5 else []
+        date_source = payment_date.strip() or transaction_date
         try:
-            parsed = datetime.strptime(transaction_date, "%d/%m/%y")
+            parsed = datetime.strptime(date_source, "%d/%m/%y")
             year = parsed.strftime("%Y")
             month = months[parsed.month - 1]
         except ValueError:

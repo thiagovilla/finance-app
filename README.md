@@ -45,8 +45,9 @@ Options:
 - `-y, --year` Override the year (YY) used for dates.
 - `-t, --total` Manual checksum total (e.g. `1234.56` or `1.234,56`).
 - `-s, --sort` Sort output by `<column> [ASC|DESC]`.
+- `-l, --layout` PDF layout: `modern` (default, Aug 2025+) or `legacy` (Jul 2025 and before).
 - `-m, --merge` Merge multiple PDFs into a single CSV output.
-- `-l, --locale` Output locale: `en-us` (default) or `pt-br`.
+- `-L, --locale` Output locale: `en-us` (default) or `pt-br`.
 - `-n, --no-headers` Omit CSV headers.
 - `-o, --output` Write output to a CSV file (idempotent append).
 - `-d, --debug` Dump debug output and exit. Optional mode: `all`, `raw`, `total`, `normalized`.
@@ -57,7 +58,8 @@ Examples:
 finance itau Fatura.pdf
 finance itau "faturas/*.pdf" -s "transaction_date DESC"
 finance itau "faturas/*.pdf" -m -o merged.csv
-finance itau Fatura.pdf -l pt-br -n
+finance itau Fatura.pdf -L pt-br -n
+finance itau Fatura.pdf -l legacy
 finance itau Fatura.pdf -t 9356.73
 finance itau Fatura.pdf -d total
 finance itau Fatura.pdf -d raw
@@ -91,6 +93,11 @@ By default:
 Use `--locale pt-br` for:
 - Dates `DD/MM/YY`
 - Amounts with `,` as decimal separator
+
+## Itaú layouts
+
+- `modern` (default): Aug 2025+ statements.
+- `legacy`: Jul 2025 and earlier; split uses midpoint on page 1 and shifts 1.5cm right on page 2+.
 
 ## Sorting
 
