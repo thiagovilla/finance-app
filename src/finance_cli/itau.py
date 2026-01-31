@@ -18,6 +18,7 @@ CSV_HEADERS = ["index", "transaction_date", "payment_date", "description", "amou
 
 
 def extract_blocks(pdf_path: Path) -> list[str]:
+    """Extract text blocks from a PDF, stopping before the installment section."""
     doc = fitz.open(pdf_path)
     blocks: list[str] = []
 
@@ -40,11 +41,13 @@ def extract_blocks(pdf_path: Path) -> list[str]:
 
 
 def parse_brl_amount(value: str) -> float:
+    """Parse a BRL-formatted amount (1.234,56) into a float."""
     cleaned = value.strip().replace(".", "").replace(",", ".")
     return float(cleaned)
 
 
 def format_date_for_locale(date_str: str, locale: str) -> str:
+    """Format DD/MM/YY to a locale-specific output date."""
     if not date_str:
         return date_str
     try:
@@ -57,13 +60,14 @@ def format_date_for_locale(date_str: str, locale: str) -> str:
 
 
 def format_amount_for_locale(amount_str: str, locale: str) -> str:
+    """Format amount string using locale-specific decimal separator."""
     if locale == "pt-br":
         return amount_str.replace(".", ",")
     return amount_str
 
 
 def find_total_in_text(text: str) -> float | None:
-    """Extracts total amount from text using regex patterns"""
+    """Find the statement total in raw or normalized PDF text."""
     for pattern in TOTAL_PATTERNS:
         match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
         if match:
@@ -83,6 +87,7 @@ def find_total_in_text(text: str) -> float | None:
 
 
 def normalize_pdf_text(text: str) -> str:
+    """Normalize PDF text by removing accents, lowercasing, and stripping whitespace."""
     normalized = unicodedata.normalize("NFKD", text)
     normalized = "".join(
         char for char in normalized if not unicodedata.combining(char)
@@ -91,6 +96,7 @@ def normalize_pdf_text(text: str) -> str:
 
 
 def extract_total_from_pdf(pdf_path: Path) -> float | None:
+    """Extract the statement total from a PDF."""
     doc = fitz.open(pdf_path)
     text = "\n".join(page.get_text() for page in doc)
     doc.close()
@@ -98,6 +104,7 @@ def extract_total_from_pdf(pdf_path: Path) -> float | None:
 
 
 def extract_raw_text(pdf_path: Path) -> str:
+    """Return the raw PDF text, separated by blank lines between pages."""
     doc = fitz.open(pdf_path)
     text = "\n\n".join(page.get_text() for page in doc)
     doc.close()
@@ -105,6 +112,7 @@ def extract_raw_text(pdf_path: Path) -> str:
 
 
 def extract_emissao_year(pdf_path: Path) -> str | None:
+    """Extract the two-digit year from the Emissao date in the PDF."""
     doc = fitz.open(pdf_path)
     text = "\n".join(page.get_text() for page in doc)
     doc.close()
@@ -118,6 +126,7 @@ def extract_emissao_year(pdf_path: Path) -> str | None:
 
 
 def extract_vencimento_date(pdf_path: Path) -> str | None:
+    """Extract the payment due date in DD/MM/YY format."""
     doc = fitz.open(pdf_path)
     text = "\n".join(page.get_text() for page in doc)
     doc.close()
@@ -190,6 +199,7 @@ def match_to_csv(match: str, year: str) -> str:
 
 
 def flip_sign_last_column(csv_data: Iterable[str]) -> list[str]:
+    """Flip the sign of the amount column for each CSV row."""
     new_data = []
     for row in csv_data:
         columns = row.split(",")
@@ -203,6 +213,7 @@ def flip_sign_last_column(csv_data: Iterable[str]) -> list[str]:
 
 
 def localize_rows(rows: Iterable[str], locale: str) -> list[str]:
+    """Localize date and amount columns for output."""
     localized: list[str] = []
     for row in rows:
         parts = row.split(",", 4)
@@ -220,6 +231,7 @@ def localize_rows(rows: Iterable[str], locale: str) -> list[str]:
 
 
 def check_total(csv_data: Iterable[str], expected_total: float) -> None:
+    """Raise if the sum of amounts does not match the expected total."""
     try:
         total_sum = sum(float(row.split(",")[4]) for row in csv_data)
     except (IndexError, ValueError) as exc:
@@ -236,6 +248,7 @@ def check_total(csv_data: Iterable[str], expected_total: float) -> None:
 def write_csv_lines(
     rows: Iterable[str], output_path: Path | None, include_headers: bool = True
 ) -> None:
+    """Write CSV rows to stdout or a file."""
     if output_path is None:
         if include_headers:
             print(",".join(CSV_HEADERS))
@@ -252,6 +265,7 @@ def write_csv_lines(
 
 
 def load_existing_rows(output_path: Path) -> set[str]:
+    """Load existing rows from a CSV file, excluding headers."""
     if not output_path.exists():
         return set()
 
@@ -267,6 +281,7 @@ def load_existing_rows(output_path: Path) -> set[str]:
 def write_csv_lines_idempotent(
     rows: Iterable[str], output_path: Path, include_headers: bool = True
 ) -> int:
+    """Append rows to a CSV file, skipping rows already present."""
     existing_rows = load_existing_rows(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -287,6 +302,7 @@ def write_csv_lines_idempotent(
 def parse_itau_pdf(
     pdf_path: Path, year: str | None = None, total: float | None = None
 ) -> list[str]:
+    """Parse a single Itau PDF into CSV rows."""
     resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
     payment_date = extract_vencimento_date(pdf_path)
 
