@@ -15,7 +15,7 @@ from finance_cli.itau import (
     extract_total_from_pdf,
     extract_raw_text,
     extract_emissao_year,
-    extract_vencimento_date,
+    extract_invoice_payment_date,
     extract_card_last4,
     flip_sign_last_column,
     localize_rows,
@@ -102,8 +102,11 @@ def parse_itau(
         "-s",
         help="Sort output (format: '<column> <ASC|DESC>').",
     ),
-    layout: Layout = typer.Option(
-        Layout.modern, "--layout", "-l", help="PDF layout (legacy or modern)."
+    layout: Layout | None = typer.Option(
+        None,
+        "--layout",
+        "-l",
+        help="PDF layout (legacy or modern). Defaults to legacy unless due date is Aug 2025 or later.",
     ),
     merge: bool = typer.Option(
         False, "--merge", "-m", help="Merge multiple PDFs into one CSV output."
@@ -125,6 +128,17 @@ def parse_itau(
     ),
 ) -> None:
     """Parse Itaú credit card PDF(s) into CSV lines (id: YYYY-MMM-index)."""
+    def resolve_layout(payment_date: str | None) -> Layout:
+        if layout is not None:
+            return layout
+        if not payment_date:
+            return Layout.legacy
+        try:
+            due_date = datetime.strptime(payment_date, "%d/%m/%y")
+        except ValueError:
+            return Layout.legacy
+        return Layout.modern if due_date >= datetime(2025, 8, 1) else Layout.legacy
+
     debug_mode = DebugMode.all
     if debug and input_paths:
         first = input_paths[0].lower()
@@ -159,8 +173,12 @@ def parse_itau(
                 outputs.append(normalize_pdf_text(raw_text))
             if mode in {DebugMode.all, DebugMode.layout}:
                 resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
-                payment_date = extract_vencimento_date(pdf_path)
-                blocks = extract_blocks_with_layout(pdf_path, layout)
+                payment_date = extract_invoice_payment_date(pdf_path)
+                layout_for_pdf = resolve_layout(payment_date)
+                outputs.append(
+                    f"layout_resolved={layout_for_pdf.value}, payment_date={payment_date or ''}"
+                )
+                blocks = extract_blocks_with_layout(pdf_path, layout_for_pdf)
                 statements = blocks_to_statements_with_layout(
                     blocks, resolved_year, payment_date, enhanced=enhanced
                 )
@@ -186,8 +204,10 @@ def parse_itau(
                             f"{page},{column},{parts[0]},{x0:.2f},{y0:.2f},{parts[1]},{parts[2]},{parts[3]},{parts[4]}"
                         )
             if mode in {DebugMode.all, DebugMode.annotate}:
+                payment_date = extract_invoice_payment_date(pdf_path)
+                layout_for_pdf = resolve_layout(payment_date)
                 annotated_path = pdf_path.with_name(f"{pdf_path.stem}_annotated.pdf")
-                annotate_pdf_blocks(pdf_path, annotated_path, layout)
+                annotate_pdf_blocks(pdf_path, annotated_path, layout_for_pdf)
                 outputs.append(f"annotated_pdf={annotated_path}")
         debug_output = "\n".join(outputs)
         if output is None:
@@ -259,8 +279,9 @@ def parse_itau(
 
     for pdf_path in pdf_paths:
         resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
-        payment_date = extract_vencimento_date(pdf_path)
-        text_blocks = extract_blocks(pdf_path, layout)
+        payment_date = extract_invoice_payment_date(pdf_path)
+        layout_for_pdf = resolve_layout(payment_date)
+        text_blocks = extract_blocks(pdf_path, layout_for_pdf)
         statements = blocks_to_statements(
             text_blocks, resolved_year, payment_date, enhanced=enhanced
         )

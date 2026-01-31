@@ -302,13 +302,23 @@ def _iter_page_lines(
     layout: Layout = Layout.modern,
 ) -> Iterable[tuple[int, dict[str, list[LineInfo]], dict[str, float | None]]]:
     """Yield per-page lines using the layout split."""
+    start_marker = _normalize_text("lançamentos: compras e saques")
     doc = fitz.open(pdf_path)
     for page_number, page, split_x in _iter_pages_with_split(doc, layout):
         page_lines = _extract_page_lines(page, split_x)
-        marker = {"left": None, "right": None}
+        marker = {
+            "left": None,
+            "right": None,
+            "start_left": None,
+            "start_right": None,
+        }
         for column, lines in page_lines.items():
             for line in lines:
-                if "comprasparceladas" in _normalize_text(line.text):
+                normalized = _normalize_text(line.text)
+                if layout == Layout.modern and marker[f"start_{column}"] is None:
+                    if start_marker in normalized:
+                        marker[f"start_{column}"] = line.y0
+                if "comprasparceladas" in normalized:
                     marker[column] = line.y0
                     break
         yield page_number, page_lines, marker
@@ -323,6 +333,10 @@ def _apply_marker(
 ) -> tuple[list[LineInfo], list[LineInfo]]:
     left_lines = page_lines["left"]
     right_lines = page_lines["right"]
+    if marker.get("start_left") is not None:
+        left_lines = [line for line in left_lines if line.y0 > marker["start_left"]]
+    if marker.get("start_right") is not None:
+        right_lines = [line for line in right_lines if line.y0 > marker["start_right"]]
     if marker["left"] is not None:
         left_lines = [line for line in left_lines if line.y0 < marker["left"]]
         right_lines = []
@@ -572,13 +586,23 @@ def _iter_page_blocks(
     tuple[int, list[tuple[str, float, float, float, float, str]], dict[str, float | None]]
 ]:
     """Yield per-page blocks using the layout split."""
+    start_marker = _normalize_text("lançamentos: compras e saques")
     doc = fitz.open(pdf_path)
     for page_number, page, split_x in _iter_pages_with_split(doc, layout):
         page_lines = _extract_page_lines(page, split_x)
-        marker = {"left": None, "right": None}
+        marker = {
+            "left": None,
+            "right": None,
+            "start_left": None,
+            "start_right": None,
+        }
         for column, lines in page_lines.items():
             for line in lines:
-                if "comprasparceladas" in _normalize_text(line.text):
+                normalized = _normalize_text(line.text)
+                if layout == Layout.modern and marker[f"start_{column}"] is None:
+                    if start_marker in normalized:
+                        marker[f"start_{column}"] = line.y0
+                if "comprasparceladas" in normalized:
                     marker[column] = line.y0
                     break
 
@@ -594,6 +618,12 @@ def _iter_page_blocks(
                 if not text:
                     continue
                 x0, y0, x1, y1 = block[0], block[1], block[2], block[3]
+                start_y = marker.get(f"start_{column}")
+                end_y = marker.get(column)
+                if start_y is not None and y0 <= start_y:
+                    continue
+                if end_y is not None and y0 >= end_y:
+                    continue
                 page_blocks.append((column, y0, x0, x1, y1, text))
 
         yield page_number, page_blocks, marker
@@ -702,22 +732,28 @@ def extract_card_last4(pdf_path: Path) -> str | None:
     text = "\n".join(page.get_text() for page in doc)
     doc.close()
 
+    masked_match = re.findall(r"X{4}\.(\d{4})", text, flags=re.IGNORECASE)
+    if masked_match:
+        return masked_match[-1]
+
     patterns = (
         r"(?:final|finais)\s*[:\-]?\s*(\d{4})",
         r"(?:Cart[aã]o|Cartao)[^\d]{0,20}(\d{4})",
     )
     for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return match.group(1)
+        matches = re.findall(pattern, text, flags=re.IGNORECASE)
+        if matches:
+            return matches[-1]
 
     normalized_text = normalize_pdf_text(text)
-    match = re.search(r"(?:cartaofinal|cartaofinais|final|finais)(\d{4})", normalized_text)
-    if match:
-        return match.group(1)
-    match = re.search(r"cartao(\d{4})", normalized_text)
-    if match:
-        return match.group(1)
+    matches = re.findall(
+        r"(?:cartaofinal|cartaofinais|final|finais)(\d{4})", normalized_text
+    )
+    if matches:
+        return matches[-1]
+    matches = re.findall(r"cartao(\d{4})", normalized_text)
+    if matches:
+        return matches[-1]
     return None
 
 
@@ -735,12 +771,19 @@ def extract_emissao_year(pdf_path: Path) -> str | None:
         return None
 
 
-def extract_vencimento_date(pdf_path: Path) -> str | None:
+def extract_invoice_payment_date(pdf_path: Path) -> str | None:
     """Extract the payment due date in DD/MM/YY format."""
     doc = fitz.open(pdf_path)
     text = "\n".join(page.get_text() for page in doc)
     doc.close()
-    match = re.search(r"Vencimento:\s*(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
+    match = re.search(
+        r"Vencimento[^\d]{0,20}(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE
+    )
+    if not match:
+        normalized_text = normalize_pdf_text(text)
+        match = re.search(
+            r"vencimento.*?(\d{2}/\d{2}/\d{4})", normalized_text
+        )
     if not match:
         return None
     try:
@@ -1013,7 +1056,7 @@ def parse_itau_pdf(
 ) -> list[str]:
     """Parse a single Itau PDF into CSV rows."""
     resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
-    payment_date = extract_vencimento_date(pdf_path)
+    payment_date = extract_invoice_payment_date(pdf_path)
 
     text_blocks = extract_blocks(pdf_path)
     statements = blocks_to_statements(text_blocks, resolved_year, payment_date)
