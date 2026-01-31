@@ -18,6 +18,36 @@ TOTAL_PATTERNS = (
 )
 CSV_HEADERS = ["id", "transaction_date", "payment_date", "description", "amount"]
 CSV_HEADERS_ENHANCED = CSV_HEADERS + ["category", "location"]
+MONTH_ABBREVIATIONS = {
+    "en-us": [
+        "JAN",
+        "FEB",
+        "MAR",
+        "APR",
+        "MAY",
+        "JUN",
+        "JUL",
+        "AUG",
+        "SEP",
+        "OCT",
+        "NOV",
+        "DEC",
+    ],
+    "pt-br": [
+        "JAN",
+        "FEV",
+        "MAR",
+        "ABR",
+        "MAI",
+        "JUN",
+        "JUL",
+        "AGO",
+        "SET",
+        "OUT",
+        "NOV",
+        "DEZ",
+    ],
+}
 
 class Layout(str, Enum):
     legacy = "legacy"
@@ -425,7 +455,6 @@ def _parse_block_with_metadata(
                 while k < len(lines) and not lines[k].strip():
                     k += 1
                 if k < len(lines):
-                    next_norm = re.sub(r"\s+", "", lines[k])
                     amount_text = _normalize_amount_text(lines[k])
                     if amount_text is not None:
                         current["installment"] = normalized
@@ -667,6 +696,31 @@ def extract_raw_text(pdf_path: Path) -> str:
     return text
 
 
+def extract_card_last4(pdf_path: Path) -> str | None:
+    """Extract the last 4 digits of the card from the PDF text."""
+    doc = fitz.open(pdf_path)
+    text = "\n".join(page.get_text() for page in doc)
+    doc.close()
+
+    patterns = (
+        r"(?:final|finais)\s*[:\-]?\s*(\d{4})",
+        r"(?:Cart[aã]o|Cartao)[^\d]{0,20}(\d{4})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    normalized_text = normalize_pdf_text(text)
+    match = re.search(r"(?:cartaofinal|cartaofinais|final|finais)(\d{4})", normalized_text)
+    if match:
+        return match.group(1)
+    match = re.search(r"cartao(\d{4})", normalized_text)
+    if match:
+        return match.group(1)
+    return None
+
+
 def extract_emissao_year(pdf_path: Path) -> str | None:
     """Extract the two-digit year from the Emissao date in the PDF."""
     doc = fitz.open(pdf_path)
@@ -693,6 +747,17 @@ def extract_vencimento_date(pdf_path: Path) -> str | None:
         return datetime.strptime(match.group(1), "%d/%m/%Y").strftime("%d/%m/%y")
     except ValueError:
         return None
+
+
+def month_number_for_date(date_str: str) -> tuple[str, str] | None:
+    """Return (YYYY, MM) for a DD/MM/YY date string."""
+    if not date_str:
+        return None
+    try:
+        parsed = datetime.strptime(date_str, "%d/%m/%y")
+    except ValueError:
+        return None
+    return parsed.strftime("%Y"), parsed.strftime("%m")
 
 
 def blocks_to_statements(
@@ -837,37 +902,7 @@ def localize_rows(rows: Iterable[str], locale: str) -> list[str]:
 
 def apply_id_schema(rows: Iterable[str], locale: str) -> list[str]:
     """Replace index with an id using YYYY-MMM-(index)."""
-    month_map = {
-        "en-us": [
-            "JAN",
-            "FEB",
-            "MAR",
-            "APR",
-            "MAY",
-            "JUN",
-            "JUL",
-            "AUG",
-            "SEP",
-            "OCT",
-            "NOV",
-            "DEC",
-        ],
-        "pt-br": [
-            "JAN",
-            "FEV",
-            "MAR",
-            "ABR",
-            "MAI",
-            "JUN",
-            "JUL",
-            "AGO",
-            "SET",
-            "OUT",
-            "NOV",
-            "DEZ",
-        ],
-    }
-    months = month_map.get(locale, month_map["en-us"])
+    months = MONTH_ABBREVIATIONS.get(locale, MONTH_ABBREVIATIONS["en-us"])
     output: list[str] = []
     for row in rows:
         parts = row.split(",", 6)

@@ -16,6 +16,7 @@ from finance_cli.itau import (
     extract_raw_text,
     extract_emissao_year,
     extract_vencimento_date,
+    extract_card_last4,
     flip_sign_last_column,
     localize_rows,
     apply_id_schema,
@@ -27,6 +28,7 @@ from finance_cli.itau import (
     CSV_HEADERS,
     CSV_HEADERS_ENHANCED,
     Layout,
+    month_number_for_date,
 )
 from finance_cli.nu import convert_date_format
 
@@ -117,6 +119,9 @@ def parse_itau(
     ),
     output: Path | None = typer.Option(
         None, "--output", "-o", help="Write output CSV (default: stdout)."
+    ),
+    rename: bool = typer.Option(
+        False, "--rename", "-r", help="Rename the PDF to Itau_XXXX_YYYY_MM after parsing."
     ),
 ) -> None:
     """Parse Itaú credit card PDF(s) into CSV lines (id: YYYY-MMM-index)."""
@@ -272,6 +277,26 @@ def parse_itau(
                 total_mismatches.append(f"{pdf_path}: {exc}")
 
         rows = flip_sign_last_column(statements)
+
+        if rename:
+            last4 = extract_card_last4(pdf_path)
+            if not last4:
+                raise typer.BadParameter(f"Could not find card last 4 for {pdf_path}.")
+            month_info = month_number_for_date(payment_date or "")
+            if month_info is None:
+                raise typer.BadParameter(
+                    f"Could not determine statement month for {pdf_path}."
+                )
+            year_full, month_number = month_info
+            target = pdf_path.with_name(
+                f"Itau_{last4}_{year_full}_{month_number}{pdf_path.suffix.lower()}"
+            )
+            if target != pdf_path:
+                if target.exists():
+                    raise typer.BadParameter(f"Rename target already exists: {target}")
+                pdf_path.rename(target)
+                typer.echo(f"Renamed {pdf_path} to {target}")
+                pdf_path = target
 
         if merge:
             all_rows.extend(rows)
