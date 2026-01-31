@@ -9,6 +9,8 @@ from finance_cli.itau import (
     match_to_csv,
     find_total_in_text,
     write_csv_lines_idempotent,
+    _apply_marker,
+    LineInfo,
 )
 
 
@@ -133,3 +135,21 @@ def test_write_csv_lines_idempotent(tmp_path) -> None:
 
     existing = load_existing_rows(output_path)
     assert existing == set(rows)
+
+
+def test_apply_marker_respects_start_marker() -> None:
+    left_lines = [
+        LineInfo(y0=10, x0=0, y1=12, x1=10, text="header"),
+        LineInfo(y0=20, x0=0, y1=22, x1=10, text="row1"),
+        LineInfo(y0=30, x0=0, y1=32, x1=10, text="row2"),
+    ]
+    right_lines = [
+        LineInfo(y0=15, x0=0, y1=17, x1=10, text="header"),
+        LineInfo(y0=30, x0=0, y1=32, x1=10, text="row3"),
+    ]
+    marker = {"left": 28.0, "right": None, "start_left": 15.0, "start_right": 25.0}
+    filtered_left, filtered_right = _apply_marker(
+        {"left": left_lines, "right": right_lines}, marker
+    )
+    assert [line.text for line in filtered_left] == ["row1"]
+    assert filtered_right == []
