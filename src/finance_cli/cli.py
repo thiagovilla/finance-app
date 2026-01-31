@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import datetime
+from enum import Enum
 import glob
 
 import typer
@@ -10,14 +11,30 @@ from finance_cli.itau import (
     blocks_to_statements,
     extract_blocks,
     extract_total_from_pdf,
+    extract_raw_text,
+    extract_emissao_year,
+    extract_vencimento_date,
     flip_sign_last_column,
+    localize_rows,
     check_total,
     write_csv_lines,
     write_csv_lines_idempotent,
+    parse_brl_amount,
 )
 from finance_cli.nu import convert_date_format
 
 app = typer.Typer(help="Personal finance CLI.")
+
+
+class Locale(str, Enum):
+    en_us = "en-us"
+    pt_br = "pt-br"
+
+class DebugMode(str, Enum):
+    all = "all"
+    raw = "raw"
+    total = "total"
+    normalized = "normalized"
 
 
 @app.command("nu")
@@ -50,25 +67,103 @@ def resolve_itau_inputs(input_path: str) -> list[Path]:
 
 @app.command("itau")
 def parse_itau(
-    input_path: str = typer.Argument(..., help="PDF file, folder, or glob pattern."),
+    input_paths: list[str] = typer.Argument(
+        ..., help="PDF file, folder, or glob pattern."
+    ),
     year: str | None = typer.Option(
         None, "--year", "-y", help="Year in YY format (default: current year)."
+    ),
+    total: str | None = typer.Option(
+        None,
+        "--total",
+        "-t",
+        help="Manual checksum total (e.g. 1234.56 or 1.234,56).",
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        "-d",
+        help="Debug output (raw, total, or all) and exit.",
+    ),
+    sort: str | None = typer.Option(
+        None,
+        "--sort",
+        "-s",
+        help="Sort output (format: '<column> <ASC|DESC>').",
+    ),
+    locale: Locale = typer.Option(
+        Locale.en_us, "--locale", "-l", help="Output locale (en or pt-br)."
+    ),
+    no_headers: bool = typer.Option(
+        False, "--no-headers", "-n", help="Do not print CSV headers."
     ),
     output: Path | None = typer.Option(
         None, "--output", "-o", help="Write output CSV (default: stdout)."
     ),
 ) -> None:
     """Parse Itaú credit card PDF(s) into CSV lines."""
-    pdf_paths = resolve_itau_inputs(input_path)
-    resolved_year = year or datetime.now().strftime("%y")
+    debug_mode = DebugMode.all
+    if debug and input_paths:
+        first = input_paths[0].lower()
+        if first in {mode.value for mode in DebugMode}:
+            debug_mode = DebugMode(first)
+            input_paths = input_paths[1:]
+
+    if not input_paths:
+        raise typer.BadParameter("Missing input path.")
+    if len(input_paths) > 1:
+        raise typer.BadParameter("Only one input path is supported.")
+
+    pdf_paths = resolve_itau_inputs(input_paths[0])
+
+    if debug:
+        mode = debug_mode
+        outputs: list[str] = []
+        for pdf_path in pdf_paths:
+            if len(pdf_paths) > 1:
+                outputs.append(f"=== {pdf_path} ===")
+            if mode in {DebugMode.all, DebugMode.total}:
+                total_found = extract_total_from_pdf(pdf_path)
+                if total_found is None:
+                    outputs.append("total_scanned=None")
+                else:
+                    outputs.append(f"total_scanned={total_found:.2f}")
+            if mode in {DebugMode.all, DebugMode.raw}:
+                outputs.append(extract_raw_text(pdf_path))
+            if mode in {DebugMode.all, DebugMode.normalized}:
+                from finance_cli.itau import normalize_pdf_text
+                raw_text = extract_raw_text(pdf_path)
+                outputs.append(normalize_pdf_text(raw_text))
+        debug_output = "\n".join(outputs)
+        if output is None:
+            print(debug_output)
+        else:
+            output.write_text(debug_output, encoding="utf-8")
+        return
+
     all_rows: list[str] = []
     total_mismatches: list[str] = []
     total_missing: list[str] = []
 
+    manual_total = None
+    if total is not None:
+        cleaned = total.strip()
+        if "," in cleaned:
+            manual_total = parse_brl_amount(cleaned)
+        else:
+            try:
+                manual_total = float(cleaned)
+            except ValueError as exc:
+                raise typer.BadParameter(f"Invalid total: {total}") from exc
+
     for pdf_path in pdf_paths:
+        resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
+        payment_date = extract_vencimento_date(pdf_path)
         text_blocks = extract_blocks(pdf_path)
-        statements = blocks_to_statements(text_blocks, resolved_year)
-        expected_total = extract_total_from_pdf(pdf_path)
+        statements = blocks_to_statements(text_blocks, resolved_year, payment_date)
+        expected_total = (
+            manual_total if manual_total is not None else extract_total_from_pdf(pdf_path)
+        )
 
         if expected_total is None:
             total_missing.append(str(pdf_path))
@@ -80,10 +175,55 @@ def parse_itau(
 
         all_rows.extend(flip_sign_last_column(statements))
 
+    if sort:
+        parts = sort.strip().split()
+        if len(parts) == 1:
+            column, direction = parts[0].lower(), "asc"
+        elif len(parts) == 2:
+            column, direction = parts[0].lower(), parts[1].lower()
+        else:
+            raise typer.BadParameter("Sort must be '<column>' or '<column> <ASC|DESC>'.")
+        if direction not in {"asc", "desc"}:
+            raise typer.BadParameter("Sort direction must be ASC or DESC.")
+
+        valid_columns = {
+            "index",
+            "transaction_date",
+            "payment_date",
+            "description",
+            "amount",
+        }
+        if column not in valid_columns:
+            raise typer.BadParameter(
+                "Sort column must be one of: index, transaction_date, payment_date, description, amount."
+            )
+
+        def sort_key(row: str):
+            fields = row.split(",", 4)
+            if len(fields) != 5:
+                return row
+            if column == "index":
+                return int(fields[0])
+            if column == "transaction_date":
+                return datetime.strptime(fields[1], "%d/%m/%y")
+            if column == "payment_date":
+                return datetime.strptime(fields[2], "%d/%m/%y") if fields[2] else datetime.min
+            if column == "description":
+                return fields[3]
+            if column == "amount":
+                return float(fields[4])
+            return row
+
+        all_rows = sorted(all_rows, key=sort_key, reverse=direction == "desc")
+
+    all_rows = localize_rows(all_rows, locale.value)
+
     if output is None:
-        write_csv_lines(all_rows, output)
+        write_csv_lines(all_rows, output, include_headers=not no_headers)
     else:
-        added = write_csv_lines_idempotent(all_rows, output)
+        added = write_csv_lines_idempotent(
+            all_rows, output, include_headers=not no_headers
+        )
         typer.echo(f"Wrote {added} new rows to {output}")
 
     if total_mismatches:
