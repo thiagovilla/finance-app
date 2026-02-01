@@ -324,6 +324,33 @@ def get_sample_description(
     return row[0]
 
 
+def get_sample_statement_by_canonical(
+    conn: DBConnection,
+    canonical_description: str,
+    source: str | None = None,
+) -> StatementPreview | None:
+    query = (
+        "SELECT id, source, txn_date, description, canonical_description, amount_cents "
+        "FROM statements WHERE canonical_description = ?"
+    )
+    params: list[str] = [canonical_description]
+    if source:
+        query += " AND source = ?"
+        params.append(source)
+    query += " ORDER BY txn_date, id LIMIT 1"
+    row = conn.execute(query, params).fetchone()
+    if row is None:
+        return None
+    return StatementPreview(
+        id=int(row[0]),
+        source=row[1],
+        txn_date=row[2],
+        description=row[3],
+        canonical_description=row[4],
+        amount_cents=int(row[5]),
+    )
+
+
 def get_next_uncategorized_statement(
     conn: DBConnection,
     source: str | None = None,
@@ -430,6 +457,127 @@ def list_categorization_candidates(
         """
     ).fetchall()
     return [(row[0], row[1]) for row in rows]
+
+
+def list_uncategorized_canonicals_with_counts(
+    conn: DBConnection,
+    source: str | None = None,
+) -> list[tuple[str, int]]:
+    query = (
+        "SELECT canonical_description, COUNT(*) "
+        "FROM statements "
+        "WHERE (category IS NULL OR category = '')"
+    )
+    params: list[str] = []
+    if source:
+        query += " AND source = ?"
+        params.append(source)
+    query += " GROUP BY canonical_description ORDER BY COUNT(*) DESC, canonical_description"
+    rows = conn.execute(query, params).fetchall()
+    return [(row[0], int(row[1])) for row in rows]
+
+
+def recanonicalize_statements(
+    conn: DBConnection,
+    source: str | None = None,
+) -> int:
+    query = "SELECT id, description, canonical_description FROM statements"
+    params: list[str] = []
+    if source:
+        query += " WHERE source = ?"
+        params.append(source)
+    rows = conn.execute(query, params).fetchall()
+    updated = 0
+    for row in rows:
+        statement_id = int(row[0])
+        description = row[1]
+        current = row[2]
+        recalculated = canonicalize_description(description)
+        if recalculated != current:
+            conn.execute(
+                "UPDATE statements SET canonical_description = ? WHERE id = ?",
+                (recalculated, statement_id),
+            )
+            updated += 1
+    return updated
+
+
+def recanonicalize_categorizations(conn: DBConnection) -> int:
+    rows = conn.execute(
+        """
+        SELECT canonical_description, category, tags, confidence, source, created_at, updated_at
+        FROM categorizations
+        """
+    ).fetchall()
+    grouped: dict[str, tuple[str, str | None, float | None, str, str, str]] = {}
+    for row in rows:
+        canonical = row[0]
+        recalculated = canonicalize_description(canonical)
+        category = row[1]
+        tags = row[2]
+        confidence = row[3]
+        source = row[4]
+        created_at = row[5]
+        updated_at = row[6]
+        existing = grouped.get(recalculated)
+        if existing is None or updated_at > existing[5]:
+            grouped[recalculated] = (
+                category,
+                tags,
+                confidence,
+                source,
+                created_at,
+                updated_at,
+            )
+
+    conn.execute("DELETE FROM categorizations")
+    for canonical, record in grouped.items():
+        category, tags, confidence, source, created_at, updated_at = record
+        conn.execute(
+            """
+            INSERT INTO categorizations (
+                canonical_description,
+                category,
+                tags,
+                confidence,
+                source,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                canonical,
+                category,
+                tags,
+                confidence,
+                source,
+                created_at,
+                updated_at,
+            ),
+        )
+    return len(grouped)
+
+
+def count_statements(conn: DBConnection, source: str | None = None) -> int:
+    query = "SELECT COUNT(*) FROM statements"
+    params: list[str] = []
+    if source:
+        query += " WHERE source = ?"
+        params.append(source)
+    row = conn.execute(query, params).fetchone()
+    return int(row[0]) if row else 0
+
+
+def count_uncategorized(conn: DBConnection, source: str | None = None) -> int:
+    query = (
+        "SELECT COUNT(*) FROM statements WHERE (category IS NULL OR category = '')"
+    )
+    params: list[str] = []
+    if source:
+        query += " AND source = ?"
+        params.append(source)
+    row = conn.execute(query, params).fetchone()
+    return int(row[0]) if row else 0
 
 
 @dataclass(frozen=True)
