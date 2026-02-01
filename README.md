@@ -64,6 +64,24 @@ Bulk apply cached categorizations (no AI in bulk mode):
 finance category --db finances.db
 ```
 
+Manually categorize with Pareto ordering (most frequent descriptions first):
+
+```bash
+finance category manual
+```
+
+If installment labels (e.g. `02/10`) are preventing grouping, re-canonicalize:
+
+```bash
+finance category recanon
+```
+
+Force AI suggestions for every item:
+
+```bash
+finance category manual --force
+```
+
 Find a statement by id or description glob, suggest categories, and cache the result:
 
 ```bash
