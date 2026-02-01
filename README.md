@@ -20,114 +20,66 @@ finance --help
 
 ## Commands
 
-### Itaú PDF parser
+### Parse
 
 ```bash
-finance itau <pdf|folder|glob> [options]
+finance parse <pdf|csv> [options]
 ```
 
-Output columns (default, with headers):
+Parses statements into the standard CSV format:
+`id`, `transaction_date`, `payment_date`, `description`, `amount` (plus optional columns).
 
-1. `index` (match order in the PDF)
-2. `transaction_date` (charge date)
-3. `payment_date` (statement due date)
-4. `description`
-5. `amount`
+Templates:
+- `itau_cc` (PDF)
+- `nubank_cc` (CSV)
+- `nubank_chk` (CSV)
 
-Notes:
-- Amounts are parsed from the PDF and sign is flipped to match cash-flow style.
-- The year comes from the PDF "Emissao" date when available.
-- The payment date comes from the PDF "Vencimento" date.
-- Output is en-us locale by default (MM/DD/YY and dot decimals).
-- When multiple PDFs are provided, a CSV is written next to each PDF by default.
-
-Options:
-- `-y, --year` Override the year (YY) used for dates.
-- `-t, --total` Manual checksum total (e.g. `1234.56` or `1.234,56`).
-- `-s, --sort` Sort output by `<column> [ASC|DESC]`.
-- `-l, --layout` PDF layout: `modern` (default, Aug 2025+) or `legacy` (Jul 2025 and before).
-- `-m, --merge` Merge multiple PDFs into a single CSV output.
-- `-L, --locale` Output locale: `en-us` (default) or `pt-br`.
-- `-n, --no-headers` Omit CSV headers.
-- `-o, --output` Write output to a CSV file (idempotent append).
-- `-d, --debug` Dump debug output and exit. Optional mode: `all`, `raw`, `total`, `normalized`.
+Auto-detection is based on file type, CSV headers, and filename hints. Override with `-t/--template`.
 
 Examples:
 
 ```bash
-finance itau Fatura.pdf
-finance itau "faturas/*.pdf" -s "transaction_date DESC"
-finance itau "faturas/*.pdf" -m -o merged.csv
-finance itau Fatura.pdf -L pt-br -n
-finance itau Fatura.pdf -l legacy
-finance itau Fatura.pdf -t 9356.73
-finance itau Fatura.pdf -d total
-finance itau Fatura.pdf -d raw
+finance parse Fatura.pdf
+finance parse "faturas/*.pdf" -s "transaction_date DESC"
+finance parse "faturas/*.pdf" -m -o merged.csv
+finance parse Itau.pdf --total 9356.73
+finance parse nubank.csv -t nubank_cc
 ```
 
-### Nu CSV normalizer
+### Import
 
 ```bash
-finance nu <csv> [-o output.csv]
+finance import <csv> [--source itau_cc|nubank_cc|nubank_chk]
 ```
 
-Normalizes Nu CSV date format and flips amounts.
+Imports a standard-format CSV into SQLite idempotently. If `--source` is omitted,
+the CLI tries to infer it from a `source` column or the filename.
 
-### SQLite database
+### Category
 
-Initialize the local database:
+Bulk apply cached categorizations (no AI in bulk mode):
 
 ```bash
-finance db init --db finances.db
+finance category --db finances.db
 ```
 
-Import a CSV into SQLite:
+Find a statement by id or description glob, suggest categories, and cache the result:
 
 ```bash
-finance db import <csv> --source itau_cc --db finances.db
+finance category find "IFOOD*"
+finance category find 123
 ```
 
-Sources: `itau_cc`, `nubank_cc`, `nubank_chk`.
+If there are no cached suggestions yet, `category find` falls back to AI and requires
+`OPENAI_API_KEY`. You can store this in a `.env` file (see `.env.example`).
 
-### AI categorization
+### Group / Export
 
-Set the API key and default DB path (optional):
-
-```bash
-export OPENAI_API_KEY=your-key
-export DATABASE_URL=finances.db
-```
-
-Categorize uncategorized statements (uses cached results first):
+These commands are placeholders for now:
 
 ```bash
-finance categorize --db finances.db --limit 50 --model gpt-4o-mini
-```
-
-Customize categorization heuristics in `config/categorization_prompt.txt` or pass a custom file:
-
-```bash
-finance categorize --prompt-file config/categorization_prompt.txt
-```
-
-You can also put these in a `.env` file (see `.env.example`).
-
-### Manual category pick
-
-Get top category suggestions and choose one:
-
-```bash
-finance category find "IFOOD AGOSTO 10/12" --top 5 --db finances.db
-```
-
-If there are no cached suggestions yet, the command falls back to AI and requires `OPENAI_API_KEY`.
-
-### Interactive review
-
-Walk through uncategorized statements one by one:
-
-```bash
-finance category pick --top 5 --db finances.db
+finance group
+finance export
 ```
 
 ## Debug output
@@ -168,7 +120,7 @@ Sort columns supported:
 Example:
 
 ```bash
-finance itau Fatura.pdf -s "amount DESC"
+finance parse Fatura.pdf -s "amount DESC"
 ```
 
 ## Tests

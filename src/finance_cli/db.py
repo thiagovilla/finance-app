@@ -306,6 +306,63 @@ def get_next_uncategorized_statement(
     )
 
 
+def get_statement_by_id(
+    conn: sqlite3.Connection,
+    statement_id: int,
+) -> StatementPreview | None:
+    row = conn.execute(
+        """
+        SELECT id, source, txn_date, description, canonical_description, amount_cents
+        FROM statements
+        WHERE id = ?
+        """,
+        (statement_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return StatementPreview(
+        id=int(row[0]),
+        source=row[1],
+        txn_date=row[2],
+        description=row[3],
+        canonical_description=row[4],
+        amount_cents=int(row[5]),
+    )
+
+
+def find_statements_by_description(
+    conn: sqlite3.Connection,
+    description_glob: str,
+    source: str | None = None,
+    limit: int = 50,
+) -> list[StatementPreview]:
+    like_pattern = _glob_to_like(description_glob)
+    query = (
+        "SELECT id, source, txn_date, description, canonical_description, amount_cents "
+        "FROM statements WHERE description LIKE ? ESCAPE '\\'"
+    )
+    params: list[str | int] = [like_pattern]
+    if source:
+        query += " AND source = ?"
+        params.append(source)
+    query += " ORDER BY txn_date, id"
+    if limit:
+        query += " LIMIT ?"
+        params.append(limit)
+    rows = conn.execute(query, params).fetchall()
+    return [
+        StatementPreview(
+            id=int(row[0]),
+            source=row[1],
+            txn_date=row[2],
+            description=row[3],
+            canonical_description=row[4],
+            amount_cents=int(row[5]),
+        )
+        for row in rows
+    ]
+
+
 def list_category_counts(conn: sqlite3.Connection) -> dict[str, int]:
     rows = conn.execute(
         """
@@ -436,3 +493,10 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 def connect_db(db_path: Path) -> sqlite3.Connection:
     return _connect(db_path)
+
+
+def _glob_to_like(pattern: str) -> str:
+    escaped = pattern.replace("\\", "\\\\")
+    escaped = escaped.replace("%", "\\%").replace("_", "\\_")
+    escaped = escaped.replace("*", "%").replace("?", "_")
+    return escaped
