@@ -26,7 +26,6 @@ from finance_cli.itau import (
     extract_card_last4,
     flip_sign_last_column,
     localize_rows,
-    apply_id_schema,
     check_total,
     write_csv_lines,
     write_csv_lines_idempotent,
@@ -225,6 +224,11 @@ def import_statements(
 ) -> None:
     """Import a standard-format CSV into Notion or the configured database."""
     resolved_source = source or _detect_source_from_csv(csv_path)
+    if resolved_source is None:
+        typer.echo(
+            "Warning: could not infer source from filename. If this is Itaú, pass --source itau_cc so IDs can be generated.",
+            err=True,
+        )
     if resolved_source is None and db_url:
         raise typer.BadParameter(
             "Could not determine source. Provide --source or include a source column."
@@ -1304,7 +1308,6 @@ def parse_itau(
             all_rows.extend(rows)
         else:
             rows = sort_rows(rows)
-            rows = apply_id_schema(rows)
             rows = localize_rows(rows)
             if output is None:
                 per_file_output = pdf_path.with_suffix(".csv")
@@ -1323,7 +1326,6 @@ def parse_itau(
     if merge:
         if sort:
             all_rows = sort_rows(all_rows)
-        all_rows = apply_id_schema(all_rows)
         all_rows = localize_rows(all_rows)
         if output is None:
             headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS

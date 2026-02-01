@@ -26,8 +26,11 @@ finance --help
 finance parse <pdf|csv> [options]
 ```
 
-Parses statements into the standard CSV format:
-`id`, `transaction_date`, `payment_date`, `description`, `amount` (plus optional columns).
+Parses statements into CSV format:
+- Itaú: `index`, `transaction_date`, `payment_date`, `description`, `amount` (plus optional columns).
+- Nubank: `id`, `transaction_date`, `payment_date`, `description`, `amount` (plus optional columns).
+
+Itaú ids are generated during import from `payment_date` and `index`.
 
 Templates:
 - `itau_cc` (PDF)

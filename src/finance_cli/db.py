@@ -12,6 +12,21 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
+EN_US_MONTH_ABBREVIATIONS = [
+    "JAN",
+    "FEB",
+    "MAR",
+    "APR",
+    "MAY",
+    "JUN",
+    "JUL",
+    "AUG",
+    "SEP",
+    "OCT",
+    "NOV",
+    "DEC",
+]
+
 
 @dataclass(frozen=True)
 class DatabaseConfig:
@@ -132,13 +147,22 @@ def import_csv(
             )
             amount_cents = _parse_amount_cents(normalized.amount)
             canonical = canonicalize_description(normalized.description)
-            raw_import_id = normalized.raw_id or _hash_import_id(
-                source=source,
-                txn_date=txn_date,
-                post_date=post_date,
-                description=normalized.description,
-                amount_cents=amount_cents,
-            )
+            raw_import_id = normalized.raw_id
+            if raw_import_id is None and source == "itau_cc":
+                if not normalized.index:
+                    raise ValueError("Missing index column for Itaú CSV import.")
+                raw_import_id = _itau_import_id(
+                    normalized.payment_date or normalized.transaction_date,
+                    normalized.index,
+                )
+            if raw_import_id is None:
+                raw_import_id = _hash_import_id(
+                    source=source,
+                    txn_date=txn_date,
+                    post_date=post_date,
+                    description=normalized.description,
+                    amount_cents=amount_cents,
+                )
             created_at = _now_iso()
 
             cursor = conn.execute(
@@ -660,6 +684,7 @@ class NormalizedRow:
     payment_date: str | None
     description: str
     amount: str
+    index: str | None
     raw_id: str | None
     category: str | None
     tags: str | None
@@ -686,6 +711,7 @@ def _normalize_row(row: dict[str, str | None]) -> NormalizedRow:
         payment_date=pick("payment_date", "post_date"),
         description=description,
         amount=amount,
+        index=pick("index", "idx"),
         raw_id=pick("id"),
         category=pick("category"),
         tags=pick("tags"),
@@ -740,6 +766,19 @@ def _parse_amount_cents(value: str) -> int:
         cleaned = cleaned.replace(".", "").replace(",", ".")
     amount = float(cleaned)
     return int(round(amount * 100))
+
+
+def _itau_import_id(payment_date: str, index: str) -> str:
+    parsed = _parse_date(payment_date)
+    if parsed is None:
+        raise ValueError(f"Invalid payment date for Itaú import: {payment_date}")
+    year, month, _ = parsed.split("-", 2)
+    try:
+        index_value = int(index)
+    except ValueError as exc:
+        raise ValueError(f"Invalid index for Itaú import: {index}") from exc
+    month_abbrev = EN_US_MONTH_ABBREVIATIONS[int(month) - 1]
+    return f"{year}-{month_abbrev}-{index_value}"
 
 
 def _hash_import_id(

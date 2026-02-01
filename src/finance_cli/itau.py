@@ -16,7 +16,7 @@ TOTAL_PATTERNS = (
     r"O\s+total\s+da\s+sua\s+fatura\s+é:\s*\n?\s*R\$\s*([\d\.]+,\d{2})",
     r"Total\s+da\s+fatura(?!\s+anterior)\s*\n?\s*(?:R\$)?\s*([\d\.]+,\d{2})",
 )
-CSV_HEADERS = ["id", "transaction_date", "payment_date", "description", "amount"]
+CSV_HEADERS = ["index", "transaction_date", "payment_date", "description", "amount"]
 CSV_HEADERS_ENHANCED = CSV_HEADERS + ["category", "location"]
 EN_US_MONTH_ABBREVIATIONS = [
     "JAN",
@@ -789,7 +789,7 @@ def blocks_to_statements(
     Each statement pattern: DD/MM, newline, description, newline, price value.
     """
     statements: list[str] = []
-    index = 0
+    index = 1
     for block in blocks:
         if enhanced:
             parsed, index = _parse_block_with_metadata(block, year, payment_date, index)
@@ -807,7 +807,7 @@ def blocks_to_statements_with_layout(
 ) -> list[tuple[int, int, str, float, float, str]]:
     """Process text blocks with layout metadata into statement entries."""
     statements: list[tuple[int, int, str, float, float, str]] = []
-    index = 0
+    index = 1
     for block in blocks:
         if enhanced:
             parsed, index = _parse_block_with_metadata(
@@ -838,7 +838,7 @@ def extract_statement_rows_with_layout(
 ) -> list[tuple[int, int, str, float, float, str]]:
     """Extract statement rows with page/column metadata using the layout split."""
     statements: list[tuple[int, int, str, float, float, str]] = []
-    index = 0
+    index = 1
     for page_number, page_lines, marker in _iter_page_lines(pdf_path, layout):
         left_lines, right_lines = _apply_marker(page_lines, marker)
         index = _parse_statements_from_lines(
