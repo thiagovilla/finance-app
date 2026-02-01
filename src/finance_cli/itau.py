@@ -18,36 +18,20 @@ TOTAL_PATTERNS = (
 )
 CSV_HEADERS = ["id", "transaction_date", "payment_date", "description", "amount"]
 CSV_HEADERS_ENHANCED = CSV_HEADERS + ["category", "location"]
-MONTH_ABBREVIATIONS = {
-    "en-us": [
-        "JAN",
-        "FEB",
-        "MAR",
-        "APR",
-        "MAY",
-        "JUN",
-        "JUL",
-        "AUG",
-        "SEP",
-        "OCT",
-        "NOV",
-        "DEC",
-    ],
-    "pt-br": [
-        "JAN",
-        "FEV",
-        "MAR",
-        "ABR",
-        "MAI",
-        "JUN",
-        "JUL",
-        "AGO",
-        "SET",
-        "OUT",
-        "NOV",
-        "DEZ",
-    ],
-}
+EN_US_MONTH_ABBREVIATIONS = [
+    "JAN",
+    "FEB",
+    "MAR",
+    "APR",
+    "MAY",
+    "JUN",
+    "JUL",
+    "AUG",
+    "SEP",
+    "OCT",
+    "NOV",
+    "DEC",
+]
 
 class Layout(str, Enum):
     legacy = "legacy"
@@ -661,24 +645,15 @@ def parse_brl_amount(value: str) -> float:
     return float(cleaned)
 
 
-def format_date_for_locale(date_str: str, locale: str) -> str:
-    """Format DD/MM/YY to a locale-specific output date."""
+def format_date_en_us(date_str: str) -> str:
+    """Format DD/MM/YY to MM/DD/YY for CSV output."""
     if not date_str:
         return date_str
     try:
         parsed = datetime.strptime(date_str, "%d/%m/%y")
     except ValueError:
         return date_str
-    if locale == "pt-br":
-        return parsed.strftime("%d/%m/%y")
     return parsed.strftime("%m/%d/%y")
-
-
-def format_amount_for_locale(amount_str: str, locale: str) -> str:
-    """Format amount string using locale-specific decimal separator."""
-    if locale == "pt-br":
-        return amount_str.replace(".", ",")
-    return amount_str
 
 
 def find_total_in_text(text: str) -> float | None:
@@ -924,8 +899,8 @@ def flip_sign_last_column(csv_data: Iterable[str]) -> list[str]:
     return new_data
 
 
-def localize_rows(rows: Iterable[str], locale: str) -> list[str]:
-    """Localize date and amount columns for output."""
+def localize_rows(rows: Iterable[str]) -> list[str]:
+    """Format date columns for en-US CSV output."""
     localized: list[str] = []
     for row in rows:
         parts = row.split(",", 6)
@@ -934,18 +909,17 @@ def localize_rows(rows: Iterable[str], locale: str) -> list[str]:
             continue
         row_id, transaction_date, payment_date, description, amount = parts[:5]
         extra = parts[5:] if len(parts) > 5 else []
-        transaction_date = format_date_for_locale(transaction_date, locale)
-        payment_date = format_date_for_locale(payment_date, locale)
-        amount = format_amount_for_locale(amount, locale)
+        transaction_date = format_date_en_us(transaction_date)
+        payment_date = format_date_en_us(payment_date)
         localized.append(
             ",".join([row_id, transaction_date, payment_date, description, amount] + extra)
         )
     return localized
 
 
-def apply_id_schema(rows: Iterable[str], locale: str) -> list[str]:
+def apply_id_schema(rows: Iterable[str]) -> list[str]:
     """Replace index with an id using YYYY-MMM-(index)."""
-    months = MONTH_ABBREVIATIONS.get(locale, MONTH_ABBREVIATIONS["en-us"])
+    months = EN_US_MONTH_ABBREVIATIONS
     output: list[str] = []
     for row in rows:
         parts = row.split(",", 6)

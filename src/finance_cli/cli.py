@@ -88,10 +88,6 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 
-class Locale(str, Enum):
-    en_us = "en-us"
-    pt_br = "pt-br"
-
 class DebugMode(str, Enum):
     all = "all"
     raw = "raw"
@@ -154,9 +150,6 @@ def parse(
     merge: bool = typer.Option(
         False, "--merge", "-m", help="Merge multiple PDFs into one CSV (Itaú only)."
     ),
-    locale: Locale = typer.Option(
-        Locale.en_us, "--locale", "-L", help="Output locale (Itaú only)."
-    ),
     no_headers: bool = typer.Option(
         False, "--no-headers", "-n", help="Do not print CSV headers (Itaú only)."
     ),
@@ -180,7 +173,6 @@ def parse(
             sort=sort,
             layout=layout,
             merge=merge,
-            locale=locale,
             no_headers=no_headers,
             enhanced=enhanced,
             output=output,
@@ -1111,7 +1103,6 @@ def parse_itau(
     sort: str | None = None,
     layout: Layout | None = None,
     merge: bool = False,
-    locale: Locale = Locale.en_us,
     no_headers: bool = False,
     enhanced: bool = False,
     output: Path | None = None,
@@ -1313,8 +1304,8 @@ def parse_itau(
             all_rows.extend(rows)
         else:
             rows = sort_rows(rows)
-            rows = apply_id_schema(rows, locale.value)
-            rows = localize_rows(rows, locale.value)
+            rows = apply_id_schema(rows)
+            rows = localize_rows(rows)
             if output is None:
                 per_file_output = pdf_path.with_suffix(".csv")
                 headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS
@@ -1332,8 +1323,8 @@ def parse_itau(
     if merge:
         if sort:
             all_rows = sort_rows(all_rows)
-        all_rows = apply_id_schema(all_rows, locale.value)
-        all_rows = localize_rows(all_rows, locale.value)
+        all_rows = apply_id_schema(all_rows)
+        all_rows = localize_rows(all_rows)
         if output is None:
             headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS
             write_csv_lines(
