@@ -1,7 +1,7 @@
 # Roadmap
 
 ## Goal
-Build a local-first personal finance CLI that ingests statements, caches AI categorization, supports tagging and query workflows, and can later grow into a web UI and analysis tools.
+Build a local-first personal finance CLI that parses statements and imports data into Notion for AI analysis, while keeping the door open for local storage, tagging, and a future web UI.
 
 ## Scope and guiding principles
 - CLI-first now, web UI later.
@@ -11,7 +11,13 @@ Build a local-first personal finance CLI that ingests statements, caches AI cate
 - Keep imports deterministic and idempotent.
 
 ## Phase 0: Baseline (current)
+- CLI command: `finance parse itau <pdf>` with layout auto-detection.
+- Placeholders: `finance parse nu_acc` (checking account) and `finance parse nu_cred` (credit card).
 - PDF/CSV parsing via CLI for Itaú and Nubank.
+
+## Near-term improvements
+- Fine-tune PDF annotation with explicit start/end markers.
+- Rework debug mode for clearer tracing and easier troubleshooting.
 
 ## Phase 1: Storage foundation
 - Create SQLite schema for statements, categories, tags.

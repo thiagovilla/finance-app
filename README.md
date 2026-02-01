@@ -31,8 +31,8 @@ Parses statements into the standard CSV format:
 
 Templates:
 - `itau_cc` (PDF)
-- `nubank_cc` (CSV)
-- `nubank_chk` (CSV)
+- `nu_cred` (CSV)
+- `nu_acc` (CSV)
 
 Auto-detection is based on file type, CSV headers, and filename hints. Override with `-t/--template`.
 
@@ -43,13 +43,13 @@ finance parse Fatura.pdf
 finance parse "faturas/*.pdf" -s "transaction_date DESC"
 finance parse "faturas/*.pdf" -m -o merged.csv
 finance parse Itau.pdf --total 9356.73
-finance parse nubank.csv -t nubank_cc
+finance parse nubank.csv -t nu_cred
 ```
 
 ### Import
 
 ```bash
-finance import <csv> [--source itau_cc|nubank_cc|nubank_chk]
+finance import <csv> [--source itau_cc|nu_cred|nu_acc]
 ```
 
 Imports a standard-format CSV into the database (SQLite by default, Postgres via URL).
@@ -149,15 +149,11 @@ Debug output modes:
 The normalized text strips accents, lowercases, and removes whitespace so
 PDF spacing artifacts are easier to diagnose.
 
-## Output localization
+## Output format
 
-By default:
+CSV output uses en-US formatting for data interchange:
 - Dates are `MM/DD/YY`
 - Amounts use `.` as decimal separator
-
-Use `--locale pt-br` for:
-- Dates `DD/MM/YY`
-- Amounts with `,` as decimal separator
 
 ## Itaú layouts
 
