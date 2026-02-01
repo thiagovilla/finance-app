@@ -5,10 +5,59 @@ import hashlib
 import re
 import sqlite3
 import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlparse
+
+
+@dataclass(frozen=True)
+class DatabaseConfig:
+    kind: str
+    dsn: str
+    sqlite_path: Path | None
+
+
+def resolve_database(value: str | Path | "DatabaseConfig") -> DatabaseConfig:
+    if isinstance(value, DatabaseConfig):
+        return value
+    if isinstance(value, Path):
+        return DatabaseConfig(kind="sqlite", dsn=str(value), sqlite_path=value)
+
+    parsed = urlparse(value)
+    if parsed.scheme in {"postgres", "postgresql"}:
+        return DatabaseConfig(kind="postgres", dsn=value, sqlite_path=None)
+    if parsed.scheme == "sqlite":
+        path = Path(parsed.path or parsed.netloc)
+        return DatabaseConfig(kind="sqlite", dsn=str(path), sqlite_path=path)
+
+    return DatabaseConfig(kind="sqlite", dsn=value, sqlite_path=Path(value))
+
+
+class DBConnection:
+    def __init__(self, *, kind: str, raw) -> None:
+        self.kind = kind
+        self._raw = raw
+
+    def execute(self, sql: str, params: Iterable | None = None):
+        sql = _normalize_sql(sql, self.kind)
+        cursor = self._raw.cursor()
+        if params is None:
+            cursor.execute(sql)
+        else:
+            cursor.execute(sql, params)
+        return cursor
+
+    def commit(self) -> None:
+        self._raw.commit()
+
+    def rollback(self) -> None:
+        self._raw.rollback()
+
+    def close(self) -> None:
+        self._raw.close()
 
 
 @dataclass(frozen=True)
@@ -38,50 +87,18 @@ class StatementPreview:
     amount_cents: int
 
 
-def init_db(db_path: Path) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    with _connect(db_path) as conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS statements (
-                id INTEGER PRIMARY KEY,
-                source TEXT NOT NULL,
-                txn_date TEXT NOT NULL,
-                post_date TEXT,
-                description TEXT NOT NULL,
-                canonical_description TEXT NOT NULL,
-                amount_cents INTEGER NOT NULL,
-                currency TEXT NOT NULL DEFAULT 'BRL',
-                raw_import_id TEXT NOT NULL UNIQUE,
-                category TEXT,
-                tags TEXT,
-                location TEXT,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_statements_canon
-                ON statements(canonical_description);
-            CREATE INDEX IF NOT EXISTS idx_statements_date
-                ON statements(txn_date);
-            CREATE INDEX IF NOT EXISTS idx_statements_source
-                ON statements(source);
-
-            CREATE TABLE IF NOT EXISTS categorizations (
-                id INTEGER PRIMARY KEY,
-                canonical_description TEXT NOT NULL UNIQUE,
-                category TEXT NOT NULL,
-                tags TEXT,
-                confidence REAL,
-                source TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            """
-        )
+def init_db(db_value: str | Path | DatabaseConfig) -> None:
+    db = resolve_database(db_value)
+    if db.kind == "sqlite":
+        assert db.sqlite_path is not None
+        db.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+    with connect_db(db) as conn:
+        for statement in _schema_statements(db.kind):
+            conn.execute(statement)
 
 
 def import_csv(
-    db_path: Path,
+    db_value: str | Path | DatabaseConfig,
     csv_path: Path,
     source: str,
     currency: str = "BRL",
@@ -89,7 +106,7 @@ def import_csv(
     if not csv_path.exists():
         raise FileNotFoundError(csv_path)
 
-    init_db(db_path)
+    init_db(db_value)
 
     inserted = 0
     skipped = 0
@@ -101,7 +118,7 @@ def import_csv(
     if not rows:
         return ImportResult(inserted=0, skipped=0)
 
-    with _connect(db_path) as conn:
+    with connect_db(db_value) as conn:
         for row in rows:
             normalized = _normalize_row(row)
             txn_date = _parse_date(normalized.transaction_date)
@@ -124,7 +141,7 @@ def import_csv(
 
             cursor = conn.execute(
                 """
-                INSERT OR IGNORE INTO statements (
+                INSERT INTO statements (
                     source,
                     txn_date,
                     post_date,
@@ -138,6 +155,7 @@ def import_csv(
                     location,
                     created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(raw_import_id) DO NOTHING
                 """,
                 (
                     source,
@@ -163,7 +181,7 @@ def import_csv(
 
 
 def fetch_uncategorized_canonicals(
-    conn: sqlite3.Connection,
+    conn: DBConnection,
     source: str | None = None,
 ) -> list[str]:
     query = (
@@ -179,7 +197,7 @@ def fetch_uncategorized_canonicals(
 
 
 def get_categorization(
-    conn: sqlite3.Connection,
+    conn: DBConnection,
     canonical_description: str,
 ) -> Categorization | None:
     row = conn.execute(
@@ -205,7 +223,7 @@ def get_categorization(
 
 
 def upsert_categorization(
-    conn: sqlite3.Connection,
+    conn: DBConnection,
     canonical_description: str,
     category: str,
     tags: str | None,
@@ -244,7 +262,7 @@ def upsert_categorization(
 
 
 def apply_categorization_to_statements(
-    conn: sqlite3.Connection,
+    conn: DBConnection,
     canonical_description: str,
     category: str,
     tags: str | None,
@@ -262,7 +280,7 @@ def apply_categorization_to_statements(
 
 
 def get_sample_description(
-    conn: sqlite3.Connection,
+    conn: DBConnection,
     canonical_description: str,
 ) -> str | None:
     row = conn.execute(
@@ -280,7 +298,7 @@ def get_sample_description(
 
 
 def get_next_uncategorized_statement(
-    conn: sqlite3.Connection,
+    conn: DBConnection,
     source: str | None = None,
 ) -> StatementPreview | None:
     query = (
@@ -307,7 +325,7 @@ def get_next_uncategorized_statement(
 
 
 def get_statement_by_id(
-    conn: sqlite3.Connection,
+    conn: DBConnection,
     statement_id: int,
 ) -> StatementPreview | None:
     row = conn.execute(
@@ -331,7 +349,7 @@ def get_statement_by_id(
 
 
 def find_statements_by_description(
-    conn: sqlite3.Connection,
+    conn: DBConnection,
     description_glob: str,
     source: str | None = None,
     limit: int = 50,
@@ -363,7 +381,7 @@ def find_statements_by_description(
     ]
 
 
-def list_category_counts(conn: sqlite3.Connection) -> dict[str, int]:
+def list_category_counts(conn: DBConnection) -> dict[str, int]:
     rows = conn.execute(
         """
         SELECT category, COUNT(*)
@@ -376,7 +394,7 @@ def list_category_counts(conn: sqlite3.Connection) -> dict[str, int]:
 
 
 def list_categorization_candidates(
-    conn: sqlite3.Connection,
+    conn: DBConnection,
 ) -> list[tuple[str, str]]:
     rows = conn.execute(
         """
@@ -485,14 +503,33 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+def _connect(db: DatabaseConfig):
+    if db.kind == "sqlite":
+        conn = sqlite3.connect(db.sqlite_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+    try:
+        import psycopg
+    except ImportError as exc:
+        raise RuntimeError(
+            "psycopg is required for Postgres support. Install it first."
+        ) from exc
+    return psycopg.connect(db.dsn)
 
 
-def connect_db(db_path: Path) -> sqlite3.Connection:
-    return _connect(db_path)
+@contextmanager
+def connect_db(db_value: str | Path | DatabaseConfig):
+    db = resolve_database(db_value)
+    conn = _connect(db)
+    wrapper = DBConnection(kind=db.kind, raw=conn)
+    try:
+        yield wrapper
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _glob_to_like(pattern: str) -> str:
@@ -500,3 +537,99 @@ def _glob_to_like(pattern: str) -> str:
     escaped = escaped.replace("%", "\\%").replace("_", "\\_")
     escaped = escaped.replace("*", "%").replace("?", "_")
     return escaped
+
+
+def _schema_statements(kind: str) -> list[str]:
+    if kind == "postgres":
+        return [
+            """
+            CREATE TABLE IF NOT EXISTS statements (
+                id BIGSERIAL PRIMARY KEY,
+                source TEXT NOT NULL,
+                txn_date TEXT NOT NULL,
+                post_date TEXT,
+                description TEXT NOT NULL,
+                canonical_description TEXT NOT NULL,
+                amount_cents INTEGER NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'BRL',
+                raw_import_id TEXT NOT NULL UNIQUE,
+                category TEXT,
+                tags TEXT,
+                location TEXT,
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_statements_canon
+                ON statements(canonical_description)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_statements_date
+                ON statements(txn_date)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_statements_source
+                ON statements(source)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS categorizations (
+                id BIGSERIAL PRIMARY KEY,
+                canonical_description TEXT NOT NULL UNIQUE,
+                category TEXT NOT NULL,
+                tags TEXT,
+                confidence DOUBLE PRECISION,
+                source TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+        ]
+    return [
+        """
+        CREATE TABLE IF NOT EXISTS statements (
+            id INTEGER PRIMARY KEY,
+            source TEXT NOT NULL,
+            txn_date TEXT NOT NULL,
+            post_date TEXT,
+            description TEXT NOT NULL,
+            canonical_description TEXT NOT NULL,
+            amount_cents INTEGER NOT NULL,
+            currency TEXT NOT NULL DEFAULT 'BRL',
+            raw_import_id TEXT NOT NULL UNIQUE,
+            category TEXT,
+            tags TEXT,
+            location TEXT,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_statements_canon
+            ON statements(canonical_description)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_statements_date
+            ON statements(txn_date)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_statements_source
+            ON statements(source)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS categorizations (
+            id INTEGER PRIMARY KEY,
+            canonical_description TEXT NOT NULL UNIQUE,
+            category TEXT NOT NULL,
+            tags TEXT,
+            confidence REAL,
+            source TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+    ]
+
+
+def _normalize_sql(sql: str, kind: str) -> str:
+    if kind == "postgres":
+        return sql.replace("?", "%s")
+    return sql

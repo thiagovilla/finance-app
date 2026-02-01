@@ -46,6 +46,7 @@ from finance_cli.db import (
     init_db,
     list_categorization_candidates,
     list_category_counts,
+    resolve_database,
     upsert_categorization,
 )
 
@@ -191,12 +192,12 @@ def import_statements(
     source: Source | None = typer.Option(
         None, "--source", "-s", help="Statement source (defaults to auto-detect)."
     ),
-    db_path: Path = typer.Option(
-        Path("finances.db"),
+    db_url: str = typer.Option(
+        "finances.db",
         "--db",
         "-d",
         envvar="DATABASE_URL",
-        help="SQLite database path.",
+        help="SQLite database path or Postgres URL.",
     ),
     currency: str = typer.Option("BRL", "--currency", "-c", help="Currency code."),
 ) -> None:
@@ -206,8 +207,9 @@ def import_statements(
         raise typer.BadParameter(
             "Could not determine source. Provide --source or include a source column."
         )
+    db = resolve_database(db_url)
     result: ImportResult = import_csv(
-        db_path,
+        db,
         csv_path,
         resolved_source.value,
         currency=currency,
@@ -222,12 +224,12 @@ app.add_typer(category_app, name="category")
 @category_app.callback(invoke_without_command=True)
 def category(
     ctx: typer.Context,
-    db_path: Path = typer.Option(
-        Path("finances.db"),
+    db_url: str = typer.Option(
+        "finances.db",
         "--db",
         "-d",
         envvar="DATABASE_URL",
-        help="SQLite database path.",
+        help="SQLite database path or Postgres URL.",
     ),
     source: Source | None = typer.Option(
         None, "--source", "-s", help="Statement source filter."
@@ -235,11 +237,12 @@ def category(
 ) -> None:
     if ctx.invoked_subcommand:
         return
-    init_db(db_path)
+    db = resolve_database(db_url)
+    init_db(db)
     applied = 0
     skipped = 0
 
-    with connect_db(db_path) as conn:
+    with connect_db(db) as conn:
         canonicals = fetch_uncategorized_canonicals(
             conn, source.value if source else None
         )
@@ -274,12 +277,13 @@ def category_find(
     ),
 ) -> None:
     """Find a statement, suggest categories, and cache the selection."""
-    db_path = ctx.parent.params["db_path"]
+    db_url = ctx.parent.params["db_url"]
     source = ctx.parent.params.get("source")
-    init_db(db_path)
+    db = resolve_database(db_url)
+    init_db(db)
     prompt_text = _read_prompt(prompt_file)
 
-    with connect_db(db_path) as conn:
+    with connect_db(db) as conn:
         if query.isdigit():
             stmt = get_statement_by_id(conn, int(query))
             if stmt is None:
