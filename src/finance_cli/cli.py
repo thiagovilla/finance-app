@@ -213,7 +213,7 @@ def import_statements(
         "--db",
         "-d",
         envvar="DATABASE_URL",
-        help="SQLite database path or Postgres URL (defaults to Notion).",
+        help="SQLite database path (defaults to Notion).",
     ),
     currency: str = typer.Option("BRL", "--currency", "-c", help="Currency code."),
     account: str | None = typer.Option(
@@ -266,7 +266,7 @@ def category(
         "--db",
         "-d",
         envvar="DATABASE_URL",
-        help="SQLite database path or Postgres URL.",
+        help="SQLite database path.",
     ),
     source: Source | None = typer.Option(
         None, "--source", "-s", help="Statement source filter."
@@ -340,7 +340,7 @@ def sync_pull(
         "--db",
         "-d",
         envvar="LOCAL_DATABASE_URL",
-        help="SQLite database path or Postgres URL for local cache.",
+        help="SQLite database path for local cache.",
     ),
     since: str | None = typer.Option(
         None,
@@ -392,7 +392,7 @@ def sync_push(
         "--db",
         "-d",
         envvar="LOCAL_DATABASE_URL",
-        help="SQLite database path or Postgres URL for local cache.",
+        help="SQLite database path for local cache.",
     ),
     source: str | None = typer.Option(
         None,
@@ -765,7 +765,7 @@ def category_cache_export(
         "--db",
         "-d",
         envvar="DATABASE_URL",
-        help="SQLite database path or Postgres URL.",
+        help="SQLite database path.",
     ),
     output: Path | None = typer.Option(
         None,
@@ -809,7 +809,7 @@ def category_cache_import(
         "--db",
         "-d",
         envvar="DATABASE_URL",
-        help="SQLite database path or Postgres URL.",
+        help="SQLite database path.",
     ),
     input_file: Path | None = typer.Option(
         None,
@@ -883,7 +883,7 @@ def prompt_get(
         "--db",
         "-d",
         envvar="DATABASE_URL",
-        help="SQLite database path or Postgres URL.",
+        help="SQLite database path.",
     ),
 ) -> None:
     """Print the categorization prompt stored in the database."""
@@ -903,7 +903,7 @@ def prompt_set(
         "--db",
         "-d",
         envvar="DATABASE_URL",
-        help="SQLite database path or Postgres URL.",
+        help="SQLite database path.",
     ),
     prompt_file: Path | None = typer.Option(
         None,

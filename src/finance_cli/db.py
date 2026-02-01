@@ -27,11 +27,13 @@ def resolve_database(value: "str | Path | DatabaseConfig") -> DatabaseConfig:
         return DatabaseConfig(kind="sqlite", dsn=str(value), sqlite_path=value)
 
     parsed = urlparse(value)
-    if parsed.scheme in {"postgres", "postgresql"}:
-        return DatabaseConfig(kind="postgres", dsn=value, sqlite_path=None)
     if parsed.scheme == "sqlite":
         path = Path(parsed.path or parsed.netloc)
         return DatabaseConfig(kind="sqlite", dsn=str(path), sqlite_path=path)
+    if parsed.scheme:
+        raise ValueError(
+            "Only SQLite is supported. Use a file path or sqlite:/// URL."
+        )
 
     return DatabaseConfig(kind="sqlite", dsn=value, sqlite_path=Path(value))
 
@@ -758,17 +760,9 @@ def _now_iso() -> str:
 
 
 def _connect(db: DatabaseConfig):
-    if db.kind == "sqlite":
-        conn = sqlite3.connect(db.sqlite_path)
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
-    try:
-        import psycopg
-    except ImportError as exc:
-        raise RuntimeError(
-            "psycopg is required for Postgres support. Install it first."
-        ) from exc
-    return psycopg.connect(db.dsn)
+    conn = sqlite3.connect(db.sqlite_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
 @contextmanager
@@ -794,57 +788,6 @@ def _glob_to_like(pattern: str) -> str:
 
 
 def _schema_statements(kind: str) -> list[str]:
-    if kind == "postgres":
-        return [
-            """
-            CREATE TABLE IF NOT EXISTS statements (
-                id BIGSERIAL PRIMARY KEY,
-                source TEXT NOT NULL,
-                txn_date TEXT NOT NULL,
-                post_date TEXT,
-                description TEXT NOT NULL,
-                canonical_description TEXT NOT NULL,
-                amount_cents INTEGER NOT NULL,
-                currency TEXT NOT NULL DEFAULT 'BRL',
-                raw_import_id TEXT NOT NULL UNIQUE,
-                category TEXT,
-                tags TEXT,
-                location TEXT,
-                created_at TEXT NOT NULL
-            )
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_statements_canon
-                ON statements(canonical_description)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_statements_date
-                ON statements(txn_date)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_statements_source
-                ON statements(source)
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS categorizations (
-                id BIGSERIAL PRIMARY KEY,
-                canonical_description TEXT NOT NULL UNIQUE,
-                category TEXT NOT NULL,
-                tags TEXT,
-                confidence DOUBLE PRECISION,
-                source TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """,
-        ]
     return [
         """
         CREATE TABLE IF NOT EXISTS statements (
@@ -898,6 +841,4 @@ def _schema_statements(kind: str) -> list[str]:
 
 
 def _normalize_sql(sql: str, kind: str) -> str:
-    if kind == "postgres":
-        return sql.replace("?", "%s")
     return sql

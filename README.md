@@ -52,7 +52,7 @@ finance parse nubank.csv -t nu_cred
 finance import <csv> [--source itau_cc|nu_cred|nu_acc]
 ```
 
-Imports a standard-format CSV into the database (SQLite by default, Postgres via URL).
+Imports a standard-format CSV into the database (SQLite).
 If `--source` is omitted,
 the CLI tries to infer it from a `source` column or the filename.
 
@@ -96,14 +96,6 @@ finance category find "IFOOD*"
 finance category find 123
 ```
 
-Use a Postgres URL to share data across machines:
-
-```bash
-export DATABASE_URL="postgresql://user:password@host:5432/finances"
-finance import statements.csv
-finance category find "IFOOD*"
-```
-
 If there are no cached suggestions yet, `category find` falls back to AI and requires
 `OPENAI_API_KEY`. You can store this in a `.env` file (see `.env.example`).
 
@@ -119,14 +111,6 @@ Read the stored prompt:
 
 ```bash
 finance category prompt get
-```
-
-## Postgres (Docker)
-
-Run a disposable Postgres container with a persistent volume:
-
-```bash
-scripts/run-postgres.sh
 ```
 
 ### Group / Export
