@@ -7,6 +7,8 @@ import csv
 import glob
 import os
 import sys
+import termios
+import tty
 
 import typer
 
@@ -463,8 +465,8 @@ def category_manual(
 
             while True:
                 _print_suggestions(top_ranked)
-                choice = typer.prompt(
-                    "Pick number, type category, (s)kip, (r)efresh, (q)uit"
+                choice = _read_single_key(
+                    "Pick number, (s)kip, (r)efresh, (q)uit, or Enter for category: "
                 ).strip()
                 if choice.lower() in {"q", "quit"}:
                     return
@@ -476,7 +478,9 @@ def category_manual(
                         preview.description, top, prompt_text=load_prompt()
                     )
                     continue
-                if choice.isdigit():
+                if choice == "":
+                    category = typer.prompt("Category").strip()
+                elif choice.isdigit():
                     index = int(choice)
                     if index < 1 or index > len(top_ranked):
                         raise typer.BadParameter("Invalid selection.")
@@ -558,6 +562,23 @@ def _read_prompt(prompt_file: Path) -> str:
     if not prompt_file.exists():
         raise typer.BadParameter(f"Prompt file not found: {prompt_file}")
     return prompt_file.read_text(encoding="utf-8")
+
+
+def _read_single_key(prompt: str) -> str:
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    if not sys.stdin.isatty():
+        return sys.stdin.readline().rstrip("\n")
+    fd = sys.stdin.fileno()
+    original = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        key = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, original)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    return key
 
 
 @category_prompt_app.command("get")

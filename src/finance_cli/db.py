@@ -306,24 +306,6 @@ def apply_categorization_to_statements(
     return cursor.rowcount
 
 
-def get_sample_description(
-    conn: DBConnection,
-    canonical_description: str,
-) -> str | None:
-    row = conn.execute(
-        """
-        SELECT description
-        FROM statements
-        WHERE canonical_description = ?
-        LIMIT 1
-        """,
-        (canonical_description,),
-    ).fetchone()
-    if row is None:
-        return None
-    return row[0]
-
-
 def get_sample_statement_by_canonical(
     conn: DBConnection,
     canonical_description: str,
@@ -334,33 +316,6 @@ def get_sample_statement_by_canonical(
         "FROM statements WHERE canonical_description = ?"
     )
     params: list[str] = [canonical_description]
-    if source:
-        query += " AND source = ?"
-        params.append(source)
-    query += " ORDER BY txn_date, id LIMIT 1"
-    row = conn.execute(query, params).fetchone()
-    if row is None:
-        return None
-    return StatementPreview(
-        id=int(row[0]),
-        source=row[1],
-        txn_date=row[2],
-        description=row[3],
-        canonical_description=row[4],
-        amount_cents=int(row[5]),
-    )
-
-
-def get_next_uncategorized_statement(
-    conn: DBConnection,
-    source: str | None = None,
-) -> StatementPreview | None:
-    query = (
-        "SELECT id, source, txn_date, description, canonical_description, amount_cents "
-        "FROM statements "
-        "WHERE (category IS NULL OR category = '')"
-    )
-    params: list[str] = []
     if source:
         query += " AND source = ?"
         params.append(source)
