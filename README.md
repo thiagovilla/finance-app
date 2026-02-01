@@ -73,6 +73,63 @@ finance nu <csv> [-o output.csv]
 
 Normalizes Nu CSV date format and flips amounts.
 
+### SQLite database
+
+Initialize the local database:
+
+```bash
+finance db init --db finances.db
+```
+
+Import a CSV into SQLite:
+
+```bash
+finance db import <csv> --source itau_cc --db finances.db
+```
+
+Sources: `itau_cc`, `nubank_cc`, `nubank_chk`.
+
+### AI categorization
+
+Set the API key and default DB path (optional):
+
+```bash
+export OPENAI_API_KEY=your-key
+export DATABASE_URL=finances.db
+```
+
+Categorize uncategorized statements (uses cached results first):
+
+```bash
+finance categorize --db finances.db --limit 50 --model gpt-4o-mini
+```
+
+Customize categorization heuristics in `config/categorization_prompt.txt` or pass a custom file:
+
+```bash
+finance categorize --prompt-file config/categorization_prompt.txt
+```
+
+You can also put these in a `.env` file (see `.env.example`).
+
+### Manual category pick
+
+Get top category suggestions and choose one:
+
+```bash
+finance category find "IFOOD AGOSTO 10/12" --top 5 --db finances.db
+```
+
+If there are no cached suggestions yet, the command falls back to AI and requires `OPENAI_API_KEY`.
+
+### Interactive review
+
+Walk through uncategorized statements one by one:
+
+```bash
+finance category pick --top 5 --db finances.db
+```
+
 ## Debug output
 
 Debug output modes:

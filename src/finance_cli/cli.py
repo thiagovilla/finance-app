@@ -4,6 +4,7 @@ from pathlib import Path
 from datetime import datetime
 from enum import Enum
 import glob
+import os
 
 import typer
 
@@ -31,8 +32,37 @@ from finance_cli.itau import (
     month_number_for_date,
 )
 from finance_cli.nu import convert_date_format
+from finance_cli.ai import AiError, categorize_description, suggest_categories
+from finance_cli.db import (
+    ImportResult,
+    apply_categorization_to_statements,
+    canonicalize_description,
+    connect_db,
+    fetch_uncategorized_canonicals,
+    get_categorization,
+    get_next_uncategorized_statement,
+    get_sample_description,
+    import_csv,
+    init_db,
+    list_categorization_candidates,
+    list_category_counts,
+    upsert_categorization,
+)
 
 app = typer.Typer(help="Personal finance CLI.")
+db_app = typer.Typer(help="SQLite storage commands.")
+app.add_typer(db_app, name="db")
+
+
+def _load_dotenv() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv()
+
+
+_load_dotenv()
 
 
 class Locale(str, Enum):
@@ -48,6 +78,12 @@ class DebugMode(str, Enum):
     annotate = "annotate"
 
 
+class Source(str, Enum):
+    itau_cc = "itau_cc"
+    nubank_cc = "nubank_cc"
+    nubank_chk = "nubank_chk"
+
+
 @app.command("nu")
 def parse_nu(
     csv_path: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
@@ -58,6 +94,335 @@ def parse_nu(
     """Normalize Nu CSV date format and flip amounts."""
     out_path = convert_date_format(csv_path, output)
     typer.echo(f"Wrote {out_path}")
+
+
+@db_app.command("init")
+def db_init(
+    db_path: Path = typer.Option(
+        Path("finances.db"),
+        "--db",
+        "-d",
+        envvar="DATABASE_URL",
+        help="SQLite database path.",
+    ),
+) -> None:
+    """Initialize the SQLite database and schema."""
+    init_db(db_path)
+    typer.echo(f"Initialized {db_path}")
+
+
+@db_app.command("import")
+def db_import(
+    csv_path: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+    source: Source = typer.Option(..., "--source", "-s", help="Statement source."),
+    db_path: Path = typer.Option(
+        Path("finances.db"),
+        "--db",
+        "-d",
+        envvar="DATABASE_URL",
+        help="SQLite database path.",
+    ),
+    currency: str = typer.Option("BRL", "--currency", "-c", help="Currency code."),
+) -> None:
+    """Import a CSV file into the SQLite database."""
+    result: ImportResult = import_csv(db_path, csv_path, source.value, currency=currency)
+    typer.echo(f"Imported {result.inserted} rows ({result.skipped} skipped)")
+
+
+@app.command("categorize")
+def categorize(
+    db_path: Path = typer.Option(
+        Path("finances.db"),
+        "--db",
+        "-d",
+        envvar="DATABASE_URL",
+        help="SQLite database path.",
+    ),
+    source: Source | None = typer.Option(
+        None, "--source", "-s", help="Statement source filter."
+    ),
+    model: str = typer.Option("gpt-4o-mini", "--model", "-m", help="OpenAI model."),
+    language: str = typer.Option("pt-br", "--language", "-l", help="Language hint."),
+    limit: int = typer.Option(50, "--limit", "-n", help="Max AI calls."),
+    prompt_file: Path = typer.Option(
+        Path("config/categorization_prompt.txt"),
+        "--prompt-file",
+        "-p",
+        help="Path to categorization prompt file.",
+    ),
+) -> None:
+    """Categorize uncategorized statements using cached AI results."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise typer.BadParameter("Missing OPENAI_API_KEY.")
+
+    prompt_text = _read_prompt(prompt_file)
+
+    init_db(db_path)
+    cached_applied = 0
+    ai_applied = 0
+    ai_errors = 0
+
+    with connect_db(db_path) as conn:
+        canonicals = fetch_uncategorized_canonicals(
+            conn, source.value if source else None
+        )
+        uncached: list[str] = []
+        for canonical in canonicals:
+            cached = get_categorization(conn, canonical)
+            if cached is None:
+                uncached.append(canonical)
+                continue
+            cached_applied += apply_categorization_to_statements(
+                conn,
+                canonical,
+                cached.category,
+                cached.tags,
+            )
+
+        to_categorize = uncached[: max(0, limit)]
+        for canonical in to_categorize:
+            description = get_sample_description(conn, canonical)
+            if description is None:
+                ai_errors += 1
+                continue
+            try:
+                result = categorize_description(
+                    description,
+                    model=model,
+                    api_key=api_key,
+                    prompt=prompt_text,
+                    language=language,
+                )
+            except AiError as exc:
+                ai_errors += 1
+                typer.echo(f"AI error for '{description}': {exc}", err=True)
+                continue
+            tags = ", ".join(result.tags) if result.tags else None
+            upsert_categorization(
+                conn,
+                canonical,
+                result.category,
+                tags,
+                result.confidence,
+                "ai",
+            )
+            ai_applied += apply_categorization_to_statements(
+                conn,
+                canonical,
+                result.category,
+                tags,
+            )
+
+    typer.echo(
+        f"Applied {cached_applied} cached and {ai_applied} AI categorizations "
+        f"({ai_errors} errors)"
+    )
+
+
+category_app = typer.Typer(help="Category helpers.")
+app.add_typer(category_app, name="category")
+
+
+@category_app.command("find")
+def category_find(
+    description: str = typer.Argument(..., help="Statement description."),
+    db_path: Path = typer.Option(
+        Path("finances.db"),
+        "--db",
+        "-d",
+        envvar="DATABASE_URL",
+        help="SQLite database path.",
+    ),
+    top: int = typer.Option(5, "--top", "-t", help="Top category suggestions."),
+    prompt_file: Path = typer.Option(
+        Path("config/categorization_prompt.txt"),
+        "--prompt-file",
+        "-p",
+        help="Path to categorization prompt file.",
+    ),
+) -> None:
+    """Suggest categories and let you pick one to apply and cache."""
+    init_db(db_path)
+    canonical = canonicalize_description(description)
+
+    prompt_text = _read_prompt(prompt_file)
+
+    with connect_db(db_path) as conn:
+        candidates = list_categorization_candidates(conn)
+        counts = list_category_counts(conn)
+        top_ranked = _rank_categories(canonical, candidates, counts, top)
+        if not top_ranked:
+            top_ranked = _ai_ranked_suggestions(
+                description, top, prompt_text=prompt_text
+            )
+        _print_suggestions(top_ranked)
+
+        choice = typer.prompt("Pick a number or type a category").strip()
+        if choice.isdigit():
+            index = int(choice)
+            if index < 1 or index > len(top_ranked):
+                raise typer.BadParameter("Invalid selection.")
+            category = top_ranked[index - 1][0]
+        else:
+            category = choice
+
+        if not category:
+            raise typer.BadParameter("Category cannot be empty.")
+
+        upsert_categorization(conn, canonical, category, None, None, "manual")
+        applied = apply_categorization_to_statements(conn, canonical, category, None)
+
+    typer.echo(f"Applied category '{category}' to {applied} statements")
+
+
+@category_app.command("pick")
+def category_pick(
+    db_path: Path = typer.Option(
+        Path("finances.db"),
+        "--db",
+        "-d",
+        envvar="DATABASE_URL",
+        help="SQLite database path.",
+    ),
+    source: Source | None = typer.Option(
+        None, "--source", "-s", help="Statement source filter."
+    ),
+    top: int = typer.Option(5, "--top", "-t", help="Top category suggestions."),
+    max_items: int = typer.Option(
+        20, "--max", "-m", help="Max statements to review (0 for unlimited)."
+    ),
+    prompt_file: Path = typer.Option(
+        Path("config/categorization_prompt.txt"),
+        "--prompt-file",
+        "-p",
+        help="Path to categorization prompt file.",
+    ),
+) -> None:
+    """Interactively review uncategorized statements and pick categories."""
+    init_db(db_path)
+    reviewed = 0
+
+    prompt_text = _read_prompt(prompt_file)
+
+    with connect_db(db_path) as conn:
+        candidates = list_categorization_candidates(conn)
+        counts = list_category_counts(conn)
+
+        while True:
+            if max_items and reviewed >= max_items:
+                break
+            stmt = get_next_uncategorized_statement(
+                conn, source.value if source else None
+            )
+            if stmt is None:
+                break
+
+            amount = stmt.amount_cents / 100
+            typer.echo("")
+            typer.echo(
+                f"[{stmt.source}] {stmt.txn_date} {amount:.2f} - {stmt.description}"
+            )
+
+            top_ranked = _rank_categories(
+                stmt.canonical_description, candidates, counts, top
+            )
+            if not top_ranked:
+                top_ranked = _ai_ranked_suggestions(
+                    stmt.description, top, prompt_text=prompt_text
+                )
+            _print_suggestions(top_ranked)
+
+            choice = typer.prompt("Pick number, type category, (s)kip, (q)uit").strip()
+            if choice.lower() in {"q", "quit"}:
+                break
+            if choice.lower() in {"s", "skip"}:
+                reviewed += 1
+                continue
+            if choice.isdigit():
+                index = int(choice)
+                if index < 1 or index > len(top_ranked):
+                    raise typer.BadParameter("Invalid selection.")
+                category = top_ranked[index - 1][0]
+            else:
+                category = choice
+
+            if not category:
+                raise typer.BadParameter("Category cannot be empty.")
+
+            upsert_categorization(
+                conn, stmt.canonical_description, category, None, None, "manual"
+            )
+            apply_categorization_to_statements(conn, stmt.canonical_description, category, None)
+            reviewed += 1
+
+    typer.echo(f"Reviewed {reviewed} statements")
+
+
+def _rank_categories(
+    canonical: str,
+    candidates: list[tuple[str, str]],
+    counts: dict[str, int],
+    top: int,
+) -> list[tuple[str, tuple[float, int]]]:
+    if not candidates:
+        return []
+    tokens = [token for token in canonical.split(" ") if token]
+    suggestions: dict[str, tuple[float, int]] = {}
+    for candidate_canonical, category in candidates:
+        candidate_tokens = [token for token in candidate_canonical.split(" ") if token]
+        if not tokens or not candidate_tokens:
+            score = 0.0
+        else:
+            overlap = len(set(tokens) & set(candidate_tokens))
+            score = overlap / max(1, len(set(tokens)))
+        current = suggestions.get(category)
+        count = counts.get(category, 0)
+        if current is None or score > current[0]:
+            suggestions[category] = (score, count)
+
+    ranked = sorted(
+        suggestions.items(),
+        key=lambda item: (item[1][0], item[1][1], item[0]),
+        reverse=True,
+    )
+    return ranked[: max(1, top)]
+
+
+def _print_suggestions(
+    ranked: list[tuple[str, tuple[float, int]]],
+) -> None:
+    if not ranked:
+        typer.echo("Suggestions: none yet")
+        return
+    typer.echo("Suggestions:")
+    for idx, (category, (score, count)) in enumerate(ranked, start=1):
+        typer.echo(f"{idx}. {category} (score={score:.2f}, count={count})")
+
+
+def _read_prompt(prompt_file: Path) -> str:
+    if not prompt_file.exists():
+        raise typer.BadParameter(f"Prompt file not found: {prompt_file}")
+    return prompt_file.read_text(encoding="utf-8")
+
+
+def _ai_ranked_suggestions(
+    description: str,
+    top: int,
+    *,
+    prompt_text: str,
+) -> list[tuple[str, tuple[float, int]]]:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise typer.BadParameter("Missing OPENAI_API_KEY.")
+    result = suggest_categories(
+        description,
+        model="gpt-4o-mini",
+        api_key=api_key,
+        prompt=prompt_text,
+        top=top,
+    )
+    return [(category, (1.0, 0)) for category in result.categories]
 
 
 def resolve_itau_inputs(input_path: str) -> list[Path]:

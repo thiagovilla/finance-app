@@ -1,2 +1,0 @@
-[console_scripts]
-finance = finance_cli.cli:app
