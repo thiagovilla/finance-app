@@ -82,6 +82,20 @@ finance category find "IFOOD*"
 If there are no cached suggestions yet, `category find` falls back to AI and requires
 `OPENAI_API_KEY`. You can store this in a `.env` file (see `.env.example`).
 
+### Prompt
+
+Store the categorization prompt in the database so it syncs across machines:
+
+```bash
+finance category prompt set --file prompts/categorization_prompt.txt
+```
+
+Read the stored prompt:
+
+```bash
+finance category prompt get
+```
+
 ## Postgres (Docker)
 
 Run a disposable Postgres container with a persistent volume:

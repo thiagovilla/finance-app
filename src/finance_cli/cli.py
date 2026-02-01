@@ -6,6 +6,7 @@ from enum import Enum
 import csv
 import glob
 import os
+import sys
 
 import typer
 
@@ -41,12 +42,14 @@ from finance_cli.db import (
     fetch_uncategorized_canonicals,
     find_statements_by_description,
     get_categorization,
+    get_setting,
     get_statement_by_id,
     import_csv,
     init_db,
     list_categorization_candidates,
     list_category_counts,
     resolve_database,
+    upsert_setting,
     upsert_categorization,
 )
 
@@ -219,6 +222,8 @@ def import_statements(
 
 category_app = typer.Typer(help="Category helpers.")
 app.add_typer(category_app, name="category")
+category_prompt_app = typer.Typer(help="Category prompt helpers.")
+category_app.add_typer(category_prompt_app, name="prompt")
 
 
 @category_app.callback(invoke_without_command=True)
@@ -270,7 +275,7 @@ def category_find(
         20, "--limit", "-n", help="Max statements to review for glob matches."
     ),
     prompt_file: Path = typer.Option(
-        Path("config/categorization_prompt.txt"),
+        Path("prompts/categorization_prompt.txt"),
         "--prompt-file",
         "-p",
         help="Path to categorization prompt file.",
@@ -281,9 +286,10 @@ def category_find(
     source = ctx.parent.params.get("source")
     db = resolve_database(db_url)
     init_db(db)
-    prompt_text = _read_prompt(prompt_file)
-
     with connect_db(db) as conn:
+        prompt_text = get_setting(conn, "categorization_prompt") or _read_prompt(
+            prompt_file
+        )
         if query.isdigit():
             stmt = get_statement_by_id(conn, int(query))
             if stmt is None:
@@ -400,6 +406,57 @@ def _read_prompt(prompt_file: Path) -> str:
     if not prompt_file.exists():
         raise typer.BadParameter(f"Prompt file not found: {prompt_file}")
     return prompt_file.read_text(encoding="utf-8")
+
+
+@category_prompt_app.command("get")
+def prompt_get(
+    db_url: str = typer.Option(
+        "finances.db",
+        "--db",
+        "-d",
+        envvar="DATABASE_URL",
+        help="SQLite database path or Postgres URL.",
+    ),
+) -> None:
+    """Print the categorization prompt stored in the database."""
+    db = resolve_database(db_url)
+    init_db(db)
+    with connect_db(db) as conn:
+        prompt_text = get_setting(conn, "categorization_prompt")
+    if prompt_text is None:
+        raise typer.BadParameter("No prompt stored in the database yet.")
+    typer.echo(prompt_text, nl=True)
+
+
+@category_prompt_app.command("set")
+def prompt_set(
+    db_url: str = typer.Option(
+        "finances.db",
+        "--db",
+        "-d",
+        envvar="DATABASE_URL",
+        help="SQLite database path or Postgres URL.",
+    ),
+    prompt_file: Path | None = typer.Option(
+        None,
+        "--file",
+        "-f",
+        help="Path to prompt file to store in the database.",
+    ),
+) -> None:
+    """Store the categorization prompt in the database."""
+    if prompt_file:
+        if not prompt_file.exists():
+            raise typer.BadParameter(f"Prompt file not found: {prompt_file}")
+        prompt_text = prompt_file.read_text(encoding="utf-8")
+    else:
+        prompt_text = sys.stdin.read()
+
+    db = resolve_database(db_url)
+    init_db(db)
+    with connect_db(db) as conn:
+        upsert_setting(conn, "categorization_prompt", prompt_text)
+    typer.echo(prompt_text, nl=True)
 
 
 def _ai_ranked_suggestions(

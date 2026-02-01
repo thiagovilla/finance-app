@@ -20,7 +20,7 @@ class DatabaseConfig:
     sqlite_path: Path | None
 
 
-def resolve_database(value: str | Path | "DatabaseConfig") -> DatabaseConfig:
+def resolve_database(value: "str | Path | DatabaseConfig") -> DatabaseConfig:
     if isinstance(value, DatabaseConfig):
         return value
     if isinstance(value, Path):
@@ -219,6 +219,33 @@ def get_categorization(
         source=row[4],
         created_at=row[5],
         updated_at=row[6],
+    )
+
+
+def get_setting(conn: DBConnection, key: str) -> str | None:
+    row = conn.execute(
+        """
+        SELECT value
+        FROM settings
+        WHERE key = ?
+        """,
+        (key,),
+    ).fetchone()
+    if row is None:
+        return None
+    return row[0]
+
+
+def upsert_setting(conn: DBConnection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value=excluded.value,
+            updated_at=excluded.updated_at
+        """,
+        (key, value, _now_iso()),
     )
 
 
@@ -583,6 +610,13 @@ def _schema_statements(kind: str) -> list[str]:
                 updated_at TEXT NOT NULL
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
         ]
     return [
         """
@@ -623,6 +657,13 @@ def _schema_statements(kind: str) -> list[str]:
             confidence REAL,
             source TEXT NOT NULL,
             created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
         """,
