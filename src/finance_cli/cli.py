@@ -39,15 +39,21 @@ from finance_cli.db import (
     ImportResult,
     apply_categorization_to_statements,
     connect_db,
+    count_statements,
+    count_uncategorized,
     fetch_uncategorized_canonicals,
     find_statements_by_description,
     get_categorization,
+    get_sample_statement_by_canonical,
     get_setting,
     get_statement_by_id,
     import_csv,
     init_db,
     list_categorization_candidates,
     list_category_counts,
+    list_uncategorized_canonicals_with_counts,
+    recanonicalize_categorizations,
+    recanonicalize_statements,
     resolve_database,
     upsert_setting,
     upsert_categorization,
@@ -359,6 +365,152 @@ def category_find(
             reviewed += 1
 
     typer.echo(f"Reviewed {reviewed} statements")
+
+
+@category_app.command("manual")
+def category_manual(
+    ctx: typer.Context,
+    top: int = typer.Option(5, "--top", "-t", help="Top category suggestions."),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Ignore cached suggestions and always call AI.",
+    ),
+) -> None:
+    """Manually categorize statements starting with the most frequent descriptions."""
+    db_url = ctx.parent.params["db_url"]
+    source = ctx.parent.params.get("source")
+    db = resolve_database(db_url)
+    init_db(db)
+
+    source_value = source.value if source else None
+    skipped: set[str] = set()
+
+    with connect_db(db) as conn:
+        total = count_statements(conn, source_value)
+        if total == 0:
+            typer.echo("No statements found.")
+            return
+
+        prompt_text: str | None = None
+
+        def load_prompt() -> str:
+            nonlocal prompt_text
+            if prompt_text is None:
+                prompt_text = get_setting(conn, "categorization_prompt") or _read_prompt(
+                    Path("config/categorization_prompt.txt")
+                )
+            return prompt_text
+
+        while True:
+            remaining = count_uncategorized(conn, source_value)
+            if remaining == 0:
+                typer.echo("All statements categorized.")
+                return
+
+            canonicals = list_uncategorized_canonicals_with_counts(
+                conn, source=source_value
+            )
+            canonical = None
+            count = 0
+            for candidate, occurrences in canonicals:
+                if candidate not in skipped:
+                    canonical = candidate
+                    count = occurrences
+                    break
+            if canonical is None:
+                skipped.clear()
+                continue
+
+            preview = get_sample_statement_by_canonical(
+                conn, canonical, source=source_value
+            )
+            if preview is None:
+                skipped.add(canonical)
+                continue
+
+            remaining_pct = (remaining / total) * 100
+            typer.echo("")
+            typer.echo(
+                f"Remaining: {remaining}/{total} uncategorized ({remaining_pct:.1f}%)"
+            )
+            amount = preview.amount_cents / 100
+            typer.echo(
+                f"[{preview.id}] [{preview.source}] {preview.txn_date} "
+                f"{amount:.2f} - {preview.description} (x{count})"
+            )
+
+            candidates = list_categorization_candidates(conn)
+            counts = list_category_counts(conn)
+            if force:
+                top_ranked = _ai_ranked_suggestions(
+                    preview.description, top, prompt_text=load_prompt()
+                )
+            else:
+                top_ranked = _rank_categories(canonical, candidates, counts, top)
+                cached = get_categorization(conn, canonical)
+                if cached is not None and all(
+                    category != cached.category for category, _ in top_ranked
+                ):
+                    top_ranked.insert(
+                        0, (cached.category, (1.0, counts.get(cached.category, 0)))
+                    )
+                if not top_ranked:
+                    top_ranked = _ai_ranked_suggestions(
+                        preview.description, top, prompt_text=load_prompt()
+                    )
+
+            while True:
+                _print_suggestions(top_ranked)
+                choice = typer.prompt(
+                    "Pick number, type category, (s)kip, (r)efresh, (q)uit"
+                ).strip()
+                if choice.lower() in {"q", "quit"}:
+                    return
+                if choice.lower() in {"s", "skip"}:
+                    skipped.add(canonical)
+                    break
+                if choice.lower() in {"r", "refresh"}:
+                    top_ranked = _ai_ranked_suggestions(
+                        preview.description, top, prompt_text=load_prompt()
+                    )
+                    continue
+                if choice.isdigit():
+                    index = int(choice)
+                    if index < 1 or index > len(top_ranked):
+                        raise typer.BadParameter("Invalid selection.")
+                    category = top_ranked[index - 1][0]
+                else:
+                    category = choice
+
+                if not category:
+                    raise typer.BadParameter("Category cannot be empty.")
+
+                upsert_categorization(conn, canonical, category, None, None, "manual")
+                apply_categorization_to_statements(conn, canonical, category, None)
+                break
+
+
+@category_app.command("recanon")
+def category_recanonicalize(
+    ctx: typer.Context,
+) -> None:
+    """Recompute canonical descriptions for statements and cached categorizations."""
+    db_url = ctx.parent.params["db_url"]
+    source = ctx.parent.params.get("source")
+    db = resolve_database(db_url)
+    init_db(db)
+    source_value = source.value if source else None
+
+    with connect_db(db) as conn:
+        updated_statements = recanonicalize_statements(conn, source=source_value)
+        updated_categorizations = recanonicalize_categorizations(conn)
+
+    typer.echo(
+        "Recanonicalized "
+        f"{updated_statements} statements and {updated_categorizations} categorizations."
+    )
 
 
 def _rank_categories(
