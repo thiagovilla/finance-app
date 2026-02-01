@@ -180,6 +180,68 @@ def import_csv(
     return ImportResult(inserted=inserted, skipped=skipped)
 
 
+def upsert_statement(
+    conn: DBConnection,
+    *,
+    source: str,
+    txn_date: str,
+    post_date: str | None,
+    description: str,
+    amount_cents: int,
+    currency: str,
+    raw_import_id: str,
+    category: str | None,
+    tags: str | None,
+    location: str | None = None,
+) -> bool:
+    canonical = canonicalize_description(description)
+    created_at = _now_iso()
+    cursor = conn.execute(
+        """
+        INSERT INTO statements (
+            source,
+            txn_date,
+            post_date,
+            description,
+            canonical_description,
+            amount_cents,
+            currency,
+            raw_import_id,
+            category,
+            tags,
+            location,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(raw_import_id) DO UPDATE SET
+            source=excluded.source,
+            txn_date=excluded.txn_date,
+            post_date=excluded.post_date,
+            description=excluded.description,
+            canonical_description=excluded.canonical_description,
+            amount_cents=excluded.amount_cents,
+            currency=excluded.currency,
+            category=excluded.category,
+            tags=excluded.tags,
+            location=excluded.location
+        """,
+        (
+            source,
+            txn_date,
+            post_date,
+            description,
+            canonical,
+            amount_cents,
+            currency,
+            raw_import_id,
+            category,
+            tags,
+            location,
+            created_at,
+        ),
+    )
+    return cursor.rowcount == 1
+
+
 def fetch_uncategorized_canonicals(
     conn: DBConnection,
     source: str | None = None,
@@ -468,6 +530,23 @@ def list_uncategorized_canonicals_with_counts(
     query += " GROUP BY canonical_description ORDER BY COUNT(*) DESC, canonical_description"
     rows = conn.execute(query, params).fetchall()
     return [(row[0], int(row[1])) for row in rows]
+
+
+def list_statements_with_categories(
+    conn: DBConnection,
+    source: str | None = None,
+) -> list[tuple[str, str]]:
+    query = (
+        "SELECT raw_import_id, category "
+        "FROM statements "
+        "WHERE category IS NOT NULL AND category != ''"
+    )
+    params: list[str] = []
+    if source:
+        query += " AND source = ?"
+        params.append(source)
+    rows = conn.execute(query, params).fetchall()
+    return [(row[0], row[1]) for row in rows]
 
 
 def recanonicalize_statements(

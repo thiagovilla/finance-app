@@ -56,13 +56,22 @@ from finance_cli.db import (
     list_categorizations,
     list_categorization_candidates,
     list_category_counts,
+    list_statements_with_categories,
     list_uncategorized_canonicals_with_counts,
     recanonicalize_categorizations,
     recanonicalize_statements,
     resolve_database,
+    upsert_statement,
     upsert_setting,
     upsert_categorization,
     upsert_categorization_full,
+)
+from finance_cli.notion_backend import (
+    fetch_notion_pages,
+    import_csv_to_notion,
+    parse_notion_statement,
+    source_from_account,
+    update_notion_category,
 )
 
 app = typer.Typer(help="Personal finance CLI.")
@@ -208,27 +217,41 @@ def import_statements(
         None, "--source", "-s", help="Statement source (defaults to auto-detect)."
     ),
     db_url: str = typer.Option(
-        "finances.db",
+        None,
         "--db",
         "-d",
         envvar="DATABASE_URL",
-        help="SQLite database path or Postgres URL.",
+        help="SQLite database path or Postgres URL (defaults to Notion).",
     ),
     currency: str = typer.Option("BRL", "--currency", "-c", help="Currency code."),
+    account: str | None = typer.Option(
+        None,
+        "--account",
+        "-a",
+        help="Account name for Notion imports (defaults from source or filename).",
+    ),
 ) -> None:
-    """Import a standard-format CSV into the SQLite database."""
+    """Import a standard-format CSV into Notion or the configured database."""
     resolved_source = source or _detect_source_from_csv(csv_path)
-    if resolved_source is None:
+    if resolved_source is None and db_url:
         raise typer.BadParameter(
             "Could not determine source. Provide --source or include a source column."
         )
-    db = resolve_database(db_url)
-    result: ImportResult = import_csv(
-        db,
-        csv_path,
-        resolved_source.value,
-        currency=currency,
-    )
+    if db_url:
+        db = resolve_database(db_url)
+        result: ImportResult = import_csv(
+            db,
+            csv_path,
+            resolved_source.value,
+            currency=currency,
+        )
+    else:
+        result = import_csv_to_notion(
+            csv_path,
+            source=resolved_source.value if resolved_source else None,
+            account=account,
+            currency=currency,
+        )
     typer.echo(f"Imported {result.inserted} rows ({result.skipped} skipped)")
 
 
@@ -238,6 +261,9 @@ category_prompt_app = typer.Typer(help="Category prompt helpers.")
 category_app.add_typer(category_prompt_app, name="prompt")
 category_cache_app = typer.Typer(help="Category cache helpers.")
 category_app.add_typer(category_cache_app, name="cache")
+
+sync_app = typer.Typer(help="Sync statements with Notion.")
+app.add_typer(sync_app, name="sync")
 
 
 @category_app.callback(invoke_without_command=True)
@@ -313,6 +339,87 @@ def category(
     if similar:
         message += f", {similar_applied} similar"
     typer.echo(message)
+
+
+@sync_app.command("pull")
+def sync_pull(
+    db_url: str = typer.Option(
+        "finances.db",
+        "--db",
+        "-d",
+        envvar="LOCAL_DATABASE_URL",
+        help="SQLite database path or Postgres URL for local cache.",
+    ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        "-s",
+        help="Only pull Notion pages edited on or after this ISO timestamp.",
+    ),
+) -> None:
+    db = resolve_database(db_url)
+    init_db(db)
+    with connect_db(db) as conn:
+        last_sync = since or get_setting(conn, "notion_last_pull")
+        pages = fetch_notion_pages(since=last_sync)
+        synced = 0
+        max_edited: str | None = None
+        for page in pages:
+            edited = page.get("last_edited_time")
+            if edited and (max_edited is None or edited > max_edited):
+                max_edited = edited
+            parsed = parse_notion_statement(page)
+            if parsed is None:
+                continue
+            amount_cents = int(round(parsed["amount"] * 100))
+            source = source_from_account(parsed.get("account")) or (
+                parsed.get("account") or "notion"
+            )
+            upsert_statement(
+                conn,
+                source=source,
+                txn_date=parsed["transaction_date"],
+                post_date=parsed.get("payment_date"),
+                description=parsed["description"],
+                amount_cents=amount_cents,
+                currency="BRL",
+                raw_import_id=parsed["external_id"],
+                category=parsed.get("category"),
+                tags=parsed.get("tags"),
+            )
+            synced += 1
+        if max_edited:
+            upsert_setting(conn, "notion_last_pull", max_edited)
+    typer.echo(f"Pulled {synced} statements from Notion")
+
+
+@sync_app.command("push")
+def sync_push(
+    db_url: str = typer.Option(
+        "finances.db",
+        "--db",
+        "-d",
+        envvar="LOCAL_DATABASE_URL",
+        help="SQLite database path or Postgres URL for local cache.",
+    ),
+    source: str | None = typer.Option(
+        None,
+        "--source",
+        help="Only push statements for this source.",
+    ),
+) -> None:
+    db = resolve_database(db_url)
+    init_db(db)
+    with connect_db(db) as conn:
+        statements = list_statements_with_categories(conn, source=source)
+    updated = 0
+    skipped = 0
+    for raw_import_id, category in statements:
+        if update_notion_category(external_id=raw_import_id, category=category):
+            updated += 1
+        else:
+            skipped += 1
+    typer.echo(f"Pushed {updated} categories to Notion ({skipped} skipped)")
 
 
 @category_app.command("find")
