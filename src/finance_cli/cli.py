@@ -103,14 +103,14 @@ class DebugMode(str, Enum):
 
 class Source(str, Enum):
     itau_cc = "itau_cc"
-    nubank_cc = "nubank_cc"
-    nubank_chk = "nubank_chk"
+    nu_cred = "nu_cred"
+    nu_acc = "nu_acc"
 
 
 class Template(str, Enum):
     itau_cc = "itau_cc"
-    nubank_cc = "nubank_cc"
-    nubank_chk = "nubank_chk"
+    nu_cred = "nu_cred"
+    nu_acc = "nu_acc"
 
 
 @app.command("parse")
@@ -988,15 +988,15 @@ def _detect_nubank_template(path: Path) -> Template:
     header = _read_csv_header(path)
     normalized = {_normalize_header(name) for name in header}
     if normalized & {"saldo", "balance", "runningbalance"}:
-        return Template.nubank_chk
+        return Template.nu_acc
     if normalized & {"categoria", "category"}:
-        return Template.nubank_cc
+        return Template.nu_cred
 
     name = path.name.lower()
-    if any(token in name for token in ["cartao", "card", "cc", "credit"]):
-        return Template.nubank_cc
-    if any(token in name for token in ["conta", "checking", "chk", "account"]):
-        return Template.nubank_chk
+    if any(token in name for token in ["cartao", "card", "cc", "credit", "nu_cred", "nubank_cc"]):
+        return Template.nu_cred
+    if any(token in name for token in ["conta", "checking", "chk", "account", "nu_acc", "nubank_ca", "nubank_chk"]):
+        return Template.nu_acc
 
     raise typer.BadParameter("Could not auto-detect template; use --template.")
 
@@ -1009,16 +1009,17 @@ def _detect_source_from_csv(csv_path: Path) -> Source | None:
             try:
                 return Source(value)
             except ValueError:
-                return None
+                alias = {"nubank_cc": "nu_cred", "nubank_chk": "nu_acc"}.get(value)
+                return Source(alias) if alias else None
         return None
 
     name = csv_path.name.lower()
     if "itau" in name:
         return Source.itau_cc
     if "nubank" in name or "nu_" in name or name.startswith("nu"):
-        if any(token in name for token in ["conta", "checking", "chk", "account"]):
-            return Source.nubank_chk
-        return Source.nubank_cc
+        if any(token in name for token in ["conta", "checking", "chk", "account", "nu_acc", "nubank_ca", "nubank_chk"]):
+            return Source.nu_acc
+        return Source.nu_cred
     return None
 
 
