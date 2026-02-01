@@ -17,13 +17,16 @@ from finance_cli.db import (
 
 _SOURCE_TO_ACCOUNT = {
     "itau_cc": "Itaú 7180",
+    "nu_cred": "Nubank CC",
+    "nu_acc": "Nubank 2240",
     "nubank_cc": "Nubank CC",
     "nubank_chk": "Nubank 2240",
+    "nubank_ca": "Nubank 2240",
 }
 _ACCOUNT_TO_SOURCE = {
     "itau 7180": "itau_cc",
-    "nubank cc": "nubank_cc",
-    "nubank 2240": "nubank_chk",
+    "nubank cc": "nu_cred",
+    "nubank 2240": "nu_acc",
 }
 
 

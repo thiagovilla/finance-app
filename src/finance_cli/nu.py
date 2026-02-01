@@ -30,6 +30,7 @@ def parse_nubank_csv(
     *,
     template: str,
 ) -> Path:
+    template = {"nubank_cc": "nu_cred", "nubank_chk": "nu_acc"}.get(template, template)
     df = pd.read_csv(input_csv)
     column_map = {_normalize_header(name): name for name in df.columns}
 
@@ -67,7 +68,7 @@ def parse_nubank_csv(
     amounts = pd.to_numeric(df[amount_col], errors="coerce")
     if amounts.isna().any():
         raise ValueError("Found invalid amounts in the CSV.")
-    if template == "nubank_cc":
+    if template == "nu_cred":
         amounts = amounts * -1
 
     descriptions = df[desc_col].astype(str).str.strip()
