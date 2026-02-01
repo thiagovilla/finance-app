@@ -76,6 +76,13 @@ If installment labels (e.g. `02/10`) are preventing grouping, re-canonicalize:
 finance category recanon
 ```
 
+Export/import the category cache:
+
+```bash
+finance category cache export --file categorizations.csv
+finance category cache import --file categorizations.csv
+```
+
 Force AI suggestions for every item:
 
 ```bash

@@ -258,6 +258,29 @@ def upsert_categorization(
     source: str,
 ) -> None:
     now = _now_iso()
+    upsert_categorization_full(
+        conn,
+        canonical_description=canonical_description,
+        category=category,
+        tags=tags,
+        confidence=confidence,
+        source=source,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def upsert_categorization_full(
+    conn: DBConnection,
+    *,
+    canonical_description: str,
+    category: str,
+    tags: str | None,
+    confidence: float | None,
+    source: str,
+    created_at: str,
+    updated_at: str,
+) -> None:
     conn.execute(
         """
         INSERT INTO categorizations (
@@ -282,8 +305,8 @@ def upsert_categorization(
             tags,
             confidence,
             source,
-            now,
-            now,
+            created_at,
+            updated_at,
         ),
     )
 
@@ -412,6 +435,21 @@ def list_categorization_candidates(
         """
     ).fetchall()
     return [(row[0], row[1]) for row in rows]
+
+
+def list_categorizations(
+    conn: DBConnection,
+) -> list[tuple[str, str, str | None, float | None, str, str, str]]:
+    rows = conn.execute(
+        """
+        SELECT canonical_description, category, tags, confidence, source, created_at, updated_at
+        FROM categorizations
+        ORDER BY canonical_description
+        """
+    ).fetchall()
+    return [
+        (row[0], row[1], row[2], row[3], row[4], row[5], row[6]) for row in rows
+    ]
 
 
 def list_uncategorized_canonicals_with_counts(

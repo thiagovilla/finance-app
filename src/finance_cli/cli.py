@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import csv
 import glob
@@ -51,6 +51,7 @@ from finance_cli.db import (
     get_statement_by_id,
     import_csv,
     init_db,
+    list_categorizations,
     list_categorization_candidates,
     list_category_counts,
     list_uncategorized_canonicals_with_counts,
@@ -59,6 +60,7 @@ from finance_cli.db import (
     resolve_database,
     upsert_setting,
     upsert_categorization,
+    upsert_categorization_full,
 )
 
 app = typer.Typer(help="Personal finance CLI.")
@@ -232,6 +234,8 @@ category_app = typer.Typer(help="Category helpers.")
 app.add_typer(category_app, name="category")
 category_prompt_app = typer.Typer(help="Category prompt helpers.")
 category_app.add_typer(category_prompt_app, name="prompt")
+category_cache_app = typer.Typer(help="Category cache helpers.")
+category_app.add_typer(category_cache_app, name="cache")
 
 
 @category_app.callback(invoke_without_command=True)
@@ -569,6 +573,111 @@ def _read_prompt(prompt_file: Path) -> str:
     if not prompt_file.exists():
         raise typer.BadParameter(f"Prompt file not found: {prompt_file}")
     return prompt_file.read_text(encoding="utf-8")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+@category_cache_app.command("export")
+def category_cache_export(
+    db_url: str = typer.Option(
+        "finances.db",
+        "--db",
+        "-d",
+        envvar="DATABASE_URL",
+        help="SQLite database path or Postgres URL.",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--file",
+        "-f",
+        help="Write cache export to a CSV file (defaults to stdout).",
+    ),
+) -> None:
+    """Export the categorization cache as CSV."""
+    db = resolve_database(db_url)
+    init_db(db)
+    rows = []
+    with connect_db(db) as conn:
+        rows = list_categorizations(conn)
+
+    output_stream = (
+        output.open("w", newline="", encoding="utf-8") if output else sys.stdout
+    )
+    writer = csv.writer(output_stream)
+    writer.writerow(
+        [
+            "canonical_description",
+            "category",
+            "tags",
+            "confidence",
+            "source",
+            "created_at",
+            "updated_at",
+        ]
+    )
+    for row in rows:
+        writer.writerow(row)
+    if output:
+        output_stream.close()
+
+
+@category_cache_app.command("import")
+def category_cache_import(
+    db_url: str = typer.Option(
+        "finances.db",
+        "--db",
+        "-d",
+        envvar="DATABASE_URL",
+        help="SQLite database path or Postgres URL.",
+    ),
+    input_file: Path | None = typer.Option(
+        None,
+        "--file",
+        "-f",
+        help="Read cache import from a CSV file (defaults to stdin).",
+    ),
+) -> None:
+    """Import the categorization cache from CSV."""
+    db = resolve_database(db_url)
+    init_db(db)
+
+    if input_file:
+        if not input_file.exists():
+            raise typer.BadParameter(f"Input file not found: {input_file}")
+        input_stream = input_file.open("r", newline="", encoding="utf-8")
+    else:
+        input_stream = sys.stdin
+
+    reader = csv.DictReader(input_stream)
+    inserted = 0
+    with connect_db(db) as conn:
+        for row in reader:
+            canonical = (row.get("canonical_description") or "").strip()
+            category = (row.get("category") or "").strip()
+            if not canonical or not category:
+                continue
+            tags = (row.get("tags") or "").strip() or None
+            confidence_value = (row.get("confidence") or "").strip()
+            confidence = float(confidence_value) if confidence_value else None
+            source = (row.get("source") or "import").strip()
+            created_at = (row.get("created_at") or _now_iso()).strip()
+            updated_at = (row.get("updated_at") or created_at).strip()
+            upsert_categorization_full(
+                conn,
+                canonical_description=canonical,
+                category=category,
+                tags=tags,
+                confidence=confidence,
+                source=source,
+                created_at=created_at,
+                updated_at=updated_at,
+            )
+            inserted += 1
+    if input_file:
+        input_stream.close()
+    typer.echo(f"Imported {inserted} cached categorizations")
 
 
 def _read_single_key(prompt: str) -> str:
