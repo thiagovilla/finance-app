@@ -466,7 +466,7 @@ def category_manual(
             while True:
                 _print_suggestions(top_ranked)
                 choice = _read_single_key(
-                    "Pick number, (s)kip, (r)efresh, (q)uit, or Enter for category: "
+                    "Pick number, (s)kip, (r)efresh, (h)int, (q)uit, or Enter for category: "
                 ).strip()
                 if choice.lower() in {"q", "quit"}:
                     return
@@ -476,6 +476,13 @@ def category_manual(
                 if choice.lower() in {"r", "refresh"}:
                     top_ranked = _ai_ranked_suggestions(
                         preview.description, top, prompt_text=load_prompt()
+                    )
+                    continue
+                if choice.lower() in {"h", "hint"}:
+                    hint = typer.prompt("AI hint").strip()
+                    prompt = f"{preview.description}\nHint: {hint}" if hint else preview.description
+                    top_ranked = _ai_ranked_suggestions(
+                        prompt, top, prompt_text=load_prompt()
                     )
                     continue
                 if choice == "":
