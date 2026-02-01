@@ -9,8 +9,8 @@ def test_parse_nubank_cc(tmp_path: Path) -> None:
     csv_path = tmp_path / "nubank_cc.csv"
     df = pd.DataFrame(
         {
-            "date": ["2025-01-02", "2025-02-03"],
-            "desc": ["Coffee", "Groceries"],
+            "date": ["02/01/2025", "03/02/2025"],
+            "description": ["Coffee", "Groceries"],
             "amount": [10.0, -20.5],
             "category": ["Food", "Market"],
         }

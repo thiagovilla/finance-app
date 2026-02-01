@@ -4,8 +4,10 @@ from pathlib import Path
 from datetime import datetime, timezone
 from enum import Enum
 import csv
+import difflib
 import glob
 import os
+import re
 import sys
 import termios
 import tty
@@ -251,21 +253,53 @@ def category(
     source: Source | None = typer.Option(
         None, "--source", "-s", help="Statement source filter."
     ),
+    similar: bool = typer.Option(
+        False,
+        "--similar",
+        "-S",
+        help="Use string similarity when applying cached categories.",
+    ),
+    similar_threshold: float = typer.Option(
+        0.9,
+        "--similar-threshold",
+        help="Minimum similarity ratio for auto-apply.",
+    ),
 ) -> None:
     if ctx.invoked_subcommand:
         return
     db = resolve_database(db_url)
     init_db(db)
     applied = 0
+    similar_applied = 0
     skipped = 0
 
     with connect_db(db) as conn:
+        similar_candidates = []
+        if similar:
+            similar_candidates = [
+                (canonical, category, tags, _normalize_similarity_text(canonical))
+                for canonical, category, tags, _, _, _, _ in list_categorizations(conn)
+            ]
         canonicals = fetch_uncategorized_canonicals(
             conn, source.value if source else None
         )
         for canonical in canonicals:
             cached = get_categorization(conn, canonical)
             if cached is None:
+                if similar:
+                    match = _find_similar_categorization(
+                        canonical, similar_candidates, similar_threshold
+                    )
+                    if match is not None:
+                        category_name, tags = match
+                        applied += apply_categorization_to_statements(
+                            conn,
+                            canonical,
+                            category_name,
+                            tags,
+                        )
+                        similar_applied += 1
+                        continue
                 skipped += 1
                 continue
             applied += apply_categorization_to_statements(
@@ -275,7 +309,10 @@ def category(
                 cached.tags,
             )
 
-    typer.echo(f"Applied {applied} cached categorizations ({skipped} skipped)")
+    message = f"Applied {applied} cached categorizations ({skipped} skipped)"
+    if similar:
+        message += f", {similar_applied} similar"
+    typer.echo(message)
 
 
 @category_app.command("find")
@@ -533,10 +570,15 @@ def _rank_categories(
     candidates: list[tuple[str, str]],
     counts: dict[str, int],
     top: int,
+    *,
+    use_similarity: bool = True,
 ) -> list[tuple[str, tuple[float, int]]]:
     if not candidates:
         return []
     tokens = [token for token in canonical.split(" ") if token]
+    canonical_similarity = (
+        _normalize_similarity_text(canonical) if use_similarity else ""
+    )
     suggestions: dict[str, tuple[float, int]] = {}
     for candidate_canonical, category in candidates:
         candidate_tokens = [token for token in candidate_canonical.split(" ") if token]
@@ -545,6 +587,12 @@ def _rank_categories(
         else:
             overlap = len(set(tokens) & set(candidate_tokens))
             score = overlap / max(1, len(set(tokens)))
+        if use_similarity:
+            similarity = _similarity_ratio(
+                canonical_similarity,
+                _normalize_similarity_text(candidate_canonical),
+            )
+            score = max(score, similarity)
         current = suggestions.get(category)
         count = counts.get(category, 0)
         if current is None or score > current[0]:
@@ -567,6 +615,38 @@ def _print_suggestions(
     typer.echo("Suggestions:")
     for idx, (category, (score, count)) in enumerate(ranked, start=1):
         typer.echo(f"{idx}. {category} (score={score:.2f}, count={count})")
+
+
+def _normalize_similarity_text(value: str) -> str:
+    cleaned = value.strip().lower()
+    cleaned = re.sub(r"[^a-z0-9]+", "", cleaned)
+    return cleaned
+
+
+def _similarity_ratio(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    return difflib.SequenceMatcher(None, left, right).ratio()
+
+
+def _find_similar_categorization(
+    canonical: str,
+    candidates: list[tuple[str, str, str | None, str]],
+    threshold: float,
+) -> tuple[str, str | None] | None:
+    target = _normalize_similarity_text(canonical)
+    if not target:
+        return None
+    best_ratio = 0.0
+    best_match: tuple[str, str | None] | None = None
+    for _, category, tags, normalized in candidates:
+        ratio = _similarity_ratio(target, normalized)
+        if ratio < threshold:
+            continue
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_match = (category, tags)
+    return best_match
 
 
 def _read_prompt(prompt_file: Path) -> str:
