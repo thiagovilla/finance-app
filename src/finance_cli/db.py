@@ -625,7 +625,8 @@ def canonicalize_description(value: str) -> str:
     cleaned = "".join(
         char for char in cleaned if not unicodedata.combining(char)
     )
-    cleaned = re.sub(r"\b\d{1,2}/\d{1,2}\b", " ", cleaned)
+    cleaned = re.sub(r"\b(?:parc|parcela|parcelado|parcelamento)\b", " ", cleaned)
+    cleaned = re.sub(r"\b\d{1,2}\s*/\s*\d{1,2}\b", " ", cleaned)
     cleaned = re.sub(r"[^\w\s]", " ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned.strip()
