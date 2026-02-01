@@ -116,6 +116,22 @@ Read the stored prompt:
 finance category prompt get
 ```
 
+## Sync
+
+Pull from Notion into the local cache:
+
+```bash
+finance sync pull
+finance sync pull --since 2024-01-01T00:00:00Z
+```
+
+Push category/reconciled updates to Notion (only changed records by default):
+
+```bash
+finance sync push
+finance sync push --force
+```
+
 ### Group / Export
 
 These commands are placeholders for now:

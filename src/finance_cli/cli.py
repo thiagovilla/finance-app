@@ -45,6 +45,7 @@ from finance_cli.db import (
     count_statements,
     count_uncategorized,
     fetch_uncategorized_canonicals,
+    get_notion_sync_state,
     find_statements_by_description,
     get_categorization,
     get_sample_statement_by_canonical,
@@ -62,6 +63,7 @@ from finance_cli.db import (
     resolve_database,
     upsert_statement,
     upsert_setting,
+    upsert_notion_sync_state,
     upsert_categorization,
     upsert_categorization_full,
 )
@@ -70,7 +72,7 @@ from finance_cli.notion_backend import (
     import_csv_to_notion,
     parse_notion_statement,
     source_from_account,
-    update_notion_category,
+    update_notion_entry,
 )
 
 app = typer.Typer(help="Personal finance CLI.")
@@ -356,7 +358,9 @@ def sync_pull(
     db = resolve_database(db_url)
     init_db(db)
     with connect_db(db) as conn:
-        last_sync = since or get_setting(conn, "notion_last_pull")
+        last_sync = since or get_setting(conn, "notion_last_sync") or get_setting(
+            conn, "notion_last_pull"
+        )
         pages = fetch_notion_pages(since=last_sync)
         synced = 0
         max_edited: str | None = None
@@ -385,6 +389,7 @@ def sync_pull(
             )
             synced += 1
         if max_edited:
+            upsert_setting(conn, "notion_last_sync", max_edited)
             upsert_setting(conn, "notion_last_pull", max_edited)
     typer.echo(f"Pulled {synced} statements from Notion")
 
@@ -398,6 +403,12 @@ def sync_push(
         envvar="LOCAL_DATABASE_URL",
         help="SQLite database path for local cache.",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Push all records instead of only those changed locally.",
+    ),
     source: str | None = typer.Option(
         None,
         "--source",
@@ -408,14 +419,32 @@ def sync_push(
     init_db(db)
     with connect_db(db) as conn:
         statements = list_statements_with_categories(conn, source=source)
-    updated = 0
-    skipped = 0
-    for raw_import_id, category in statements:
-        if update_notion_category(external_id=raw_import_id, category=category):
-            updated += 1
-        else:
-            skipped += 1
-    typer.echo(f"Pushed {updated} categories to Notion ({skipped} skipped)")
+        updated = 0
+        skipped = 0
+        reconciled = True
+        for raw_import_id, category in statements:
+            if not force:
+                last_state = get_notion_sync_state(conn, raw_import_id)
+                if last_state is not None:
+                    last_category, last_reconciled = last_state
+                    if last_category == category and last_reconciled == reconciled:
+                        skipped += 1
+                        continue
+            if update_notion_entry(
+                external_id=raw_import_id,
+                category=category,
+                reconciled=reconciled,
+            ):
+                upsert_notion_sync_state(
+                    conn,
+                    external_id=raw_import_id,
+                    category=category,
+                    reconciled=reconciled,
+                )
+                updated += 1
+            else:
+                skipped += 1
+    typer.echo(f"Pushed {updated} records to Notion ({skipped} skipped)")
 
 
 @category_app.command("find")

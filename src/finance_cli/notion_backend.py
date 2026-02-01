@@ -97,8 +97,8 @@ def import_csv_to_notion(
     *,
     source: str | None,
     account: str | None,
-    currency: str = "BRL",
 ) -> ImportResult:
+    """Imports transactions from CSV to Notion"""
     if not csv_path.exists():
         raise FileNotFoundError(csv_path)
 
@@ -121,6 +121,7 @@ def import_csv_to_notion(
     if not account_name:
         raise ValueError("Could not determine account name for Notion import.")
 
+    # Iterates rows; persists normalized transactions to Notion; tallies results
     for row in rows:
         normalized = _normalize_row(row)
         txn_date = _parse_date(normalized.transaction_date)
@@ -188,24 +189,27 @@ def fetch_notion_pages(
     return pages
 
 
-def update_notion_category(
+def update_notion_entry(
     *,
     external_id: str,
-    category: str,
+    category: str | None,
+    reconciled: bool | None,
 ) -> bool:
-    if not external_id or not category:
+    if not external_id:
         return False
     config = load_notion_config()
     notion = _create_notion_client(config.token)
     page_id = _find_page_id_by_external_id(notion, config.database_id, external_id)
     if not page_id:
         return False
-    notion.pages.update(
-        page_id=page_id,
-        properties={
-            "Category": {"select": {"name": category}},
-        },
-    )
+    properties: dict[str, dict] = {}
+    if category:
+        properties["Category"] = {"select": {"name": category}}
+    if reconciled is not None:
+        properties["Reconciled"] = {"checkbox": reconciled}
+    if not properties:
+        return False
+    notion.pages.update(page_id=page_id, properties=properties)
     return True
 
 
@@ -225,13 +229,31 @@ def _query_database(notion, **payload) -> dict:
         return databases.query_database(**payload)
     if hasattr(notion, "request"):
         database_id = payload.pop("database_id")
-        return notion.request("POST", f"/databases/{database_id}/query", json=payload)
+        return _request_notion(notion, database_id, payload)
     if hasattr(notion, "client") and hasattr(notion.client, "request"):
         database_id = payload.pop("database_id")
-        return notion.client.request(
-            "POST", f"/databases/{database_id}/query", json=payload
-        )
+        return _request_notion(notion.client, database_id, payload)
     raise RuntimeError("Notion client does not support database queries.")
+
+
+def _request_notion(client, database_id: str, payload: dict) -> dict:
+    path = f"/databases/{database_id}/query"
+    for key in ("json", "body", "payload", "data"):
+        for order in ("method_first", "path_first"):
+            try:
+                if order == "method_first":
+                    return client.request(method="POST", path=path, **{key: payload})
+                return client.request(path=path, method="POST", **{key: payload})
+            except TypeError:
+                continue
+    for order in ("method_first", "path_first"):
+        try:
+            if order == "method_first":
+                return client.request(method="POST", path=path)
+            return client.request(path=path, method="POST")
+        except TypeError:
+            continue
+    raise RuntimeError("Notion client request signature not supported.")
 
 
 def _notion_has_external_id(notion, database_id: str, external_id: str) -> bool:

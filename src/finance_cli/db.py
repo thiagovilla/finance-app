@@ -575,6 +575,47 @@ def list_statements_with_categories(
     return [(row[0], row[1]) for row in rows]
 
 
+def get_notion_sync_state(
+    conn: DBConnection,
+    external_id: str,
+) -> tuple[str | None, bool] | None:
+    row = conn.execute(
+        """
+        SELECT last_category, last_reconciled
+        FROM notion_sync_state
+        WHERE external_id = ?
+        """,
+        (external_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return row[0], bool(row[1])
+
+
+def upsert_notion_sync_state(
+    conn: DBConnection,
+    *,
+    external_id: str,
+    category: str | None,
+    reconciled: bool,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO notion_sync_state (
+            external_id,
+            last_category,
+            last_reconciled,
+            updated_at
+        ) VALUES (?, ?, ?, ?)
+        ON CONFLICT(external_id) DO UPDATE SET
+            last_category=excluded.last_category,
+            last_reconciled=excluded.last_reconciled,
+            updated_at=excluded.updated_at
+        """,
+        (external_id, category, int(reconciled), _now_iso()),
+    )
+
+
 def recanonicalize_statements(
     conn: DBConnection,
     source: str | None = None,
@@ -873,6 +914,14 @@ def _schema_statements(kind: str) -> list[str]:
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS notion_sync_state (
+            external_id TEXT PRIMARY KEY,
+            last_category TEXT,
+            last_reconciled INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL
         )
         """,
