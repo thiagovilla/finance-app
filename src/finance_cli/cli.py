@@ -67,7 +67,7 @@ from finance_cli.db import (
     upsert_categorization,
     upsert_categorization_full,
 )
-from finance_cli.notion_backend import (
+from finance_cli.notion import (
     fetch_notion_pages,
     import_csv_to_notion,
     parse_notion_statement,
