@@ -67,13 +67,7 @@ from finance_cli.db import (
     upsert_categorization,
     upsert_categorization_full,
 )
-from finance_cli.notion import (
-    fetch_notion_pages,
-    import_csv_to_notion,
-    parse_notion_statement,
-    source_from_account,
-    update_notion_entry,
-)
+from finance_cli.notion_cli import notion_app
 
 app = typer.Typer(help="Personal finance CLI.")
 
@@ -112,57 +106,57 @@ class Template(str, Enum):
 
 @app.command("parse")
 def parse(
-    input_path: str = typer.Argument(..., help="PDF or CSV to parse."),
-    template: Template | None = typer.Option(
-        None,
-        "--template",
-        "-t",
-        help="Parsing template (defaults to auto-detect).",
-    ),
-    output: Path | None = typer.Option(
-        None, "--output", "-o", help="Write output CSV (default depends on template)."
-    ),
-    year: str | None = typer.Option(
-        None, "--year", "-y", help="Year in YY format (Itaú only)."
-    ),
-    total: str | None = typer.Option(
-        None,
-        "--total",
-        help="Manual checksum total (Itaú only, e.g. 1234.56 or 1.234,56).",
-    ),
-    debug: bool = typer.Option(
-        False,
-        "--debug",
-        "-d",
-        help="Debug output (raw, total, normalized, layout, annotate, or all) and exit.",
-    ),
-    sort: str | None = typer.Option(
-        None,
-        "--sort",
-        "-s",
-        help="Sort output (format: '<column> <ASC|DESC>') (Itaú only).",
-    ),
-    layout: Layout | None = typer.Option(
-        None,
-        "--layout",
-        "-l",
-        help="PDF layout (Itaú only).",
-    ),
-    merge: bool = typer.Option(
-        False, "--merge", "-m", help="Merge multiple PDFs into one CSV (Itaú only)."
-    ),
-    no_headers: bool = typer.Option(
-        False, "--no-headers", "-n", help="Do not print CSV headers (Itaú only)."
-    ),
-    enhanced: bool = typer.Option(
-        False,
-        "--enhanced",
-        "-e",
-        help="Capture category/location when available (Itaú only).",
-    ),
-    rename: bool = typer.Option(
-        False, "--rename", "-r", help="Rename the PDF after parsing (Itaú only)."
-    ),
+        input_path: str = typer.Argument(..., help="PDF or CSV to parse."),
+        template: Template | None = typer.Option(
+            None,
+            "--template",
+            "-t",
+            help="Parsing template (defaults to auto-detect).",
+        ),
+        output: Path | None = typer.Option(
+            None, "--output", "-o", help="Write output CSV (default depends on template)."
+        ),
+        year: str | None = typer.Option(
+            None, "--year", "-y", help="Year in YY format (Itaú only)."
+        ),
+        total: str | None = typer.Option(
+            None,
+            "--total",
+            help="Manual checksum total (Itaú only, e.g. 1234.56 or 1.234,56).",
+        ),
+        debug: bool = typer.Option(
+            False,
+            "--debug",
+            "-d",
+            help="Debug output (raw, total, normalized, layout, annotate, or all) and exit.",
+        ),
+        sort: str | None = typer.Option(
+            None,
+            "--sort",
+            "-s",
+            help="Sort output (format: '<column> <ASC|DESC>') (Itaú only).",
+        ),
+        layout: Layout | None = typer.Option(
+            None,
+            "--layout",
+            "-l",
+            help="PDF layout (Itaú only).",
+        ),
+        merge: bool = typer.Option(
+            False, "--merge", "-m", help="Merge multiple PDFs into one CSV (Itaú only)."
+        ),
+        no_headers: bool = typer.Option(
+            False, "--no-headers", "-n", help="Do not print CSV headers (Itaú only)."
+        ),
+        enhanced: bool = typer.Option(
+            False,
+            "--enhanced",
+            "-e",
+            help="Capture category/location when available (Itaú only).",
+        ),
+        rename: bool = typer.Option(
+            False, "--rename", "-r", help="Rename the PDF after parsing (Itaú only)."
+        ),
 ) -> None:
     resolved_template = template or _detect_template(input_path)
     if resolved_template == Template.itau_cc:
@@ -205,24 +199,24 @@ def parse(
 
 @app.command("import")
 def import_statements(
-    csv_path: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
-    source: Source | None = typer.Option(
-        None, "--source", "-s", help="Statement source (defaults to auto-detect)."
-    ),
-    db_url: str = typer.Option(
-        None,
-        "--db",
-        "-d",
-        envvar="DATABASE_URL",
-        help="SQLite database path (defaults to Notion).",
-    ),
-    currency: str = typer.Option("BRL", "--currency", "-c", help="Currency code."),
-    account: str | None = typer.Option(
-        None,
-        "--account",
-        "-a",
-        help="Account name for Notion imports (defaults from source or filename).",
-    ),
+        csv_path: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+        source: Source | None = typer.Option(
+            None, "--source", "-s", help="Statement source (defaults to auto-detect)."
+        ),
+        db_url: str = typer.Option(
+            None,
+            "--db",
+            "-d",
+            envvar="DATABASE_URL",
+            help="SQLite database path (defaults to Notion).",
+        ),
+        currency: str = typer.Option("BRL", "--currency", "-c", help="Currency code."),
+        account: str | None = typer.Option(
+            None,
+            "--account",
+            "-a",
+            help="Account name for Notion imports (defaults from source or filename).",
+        ),
 ) -> None:
     """Import a standard-format CSV into Notion or the configured database."""
     resolved_source = source or _detect_source_from_csv(csv_path)
@@ -243,13 +237,6 @@ def import_statements(
             resolved_source.value,
             currency=currency,
         )
-    else:
-        result = import_csv_to_notion(
-            csv_path,
-            source=resolved_source.value if resolved_source else None,
-            account=account,
-            currency=currency,
-        )
     typer.echo(f"Imported {result.inserted} rows ({result.skipped} skipped)")
 
 
@@ -263,31 +250,33 @@ category_app.add_typer(category_cache_app, name="cache")
 sync_app = typer.Typer(help="Sync statements with Notion.")
 app.add_typer(sync_app, name="sync")
 
+app.add_typer(notion_app, name="notion")
+
 
 @category_app.callback(invoke_without_command=True)
 def category(
-    ctx: typer.Context,
-    db_url: str = typer.Option(
-        "finances.db",
-        "--db",
-        "-d",
-        envvar="DATABASE_URL",
-        help="SQLite database path.",
-    ),
-    source: Source | None = typer.Option(
-        None, "--source", "-s", help="Statement source filter."
-    ),
-    similar: bool = typer.Option(
-        False,
-        "--similar",
-        "-S",
-        help="Use string similarity when applying cached categories.",
-    ),
-    similar_threshold: float = typer.Option(
-        0.9,
-        "--similar-threshold",
-        help="Minimum similarity ratio for auto-apply.",
-    ),
+        ctx: typer.Context,
+        db_url: str = typer.Option(
+            "finances.db",
+            "--db",
+            "-d",
+            envvar="DATABASE_URL",
+            help="SQLite database path.",
+        ),
+        source: Source | None = typer.Option(
+            None, "--source", "-s", help="Statement source filter."
+        ),
+        similar: bool = typer.Option(
+            False,
+            "--similar",
+            "-S",
+            help="Use string similarity when applying cached categories.",
+        ),
+        similar_threshold: float = typer.Option(
+            0.9,
+            "--similar-threshold",
+            help="Minimum similarity ratio for auto-apply.",
+        ),
 ) -> None:
     if ctx.invoked_subcommand:
         return
@@ -339,128 +328,128 @@ def category(
     typer.echo(message)
 
 
-@sync_app.command("pull")
-def sync_pull(
-    db_url: str = typer.Option(
-        "finances.db",
-        "--db",
-        "-d",
-        envvar="LOCAL_DATABASE_URL",
-        help="SQLite database path for local cache.",
-    ),
-    since: str | None = typer.Option(
-        None,
-        "--since",
-        "-s",
-        help="Only pull Notion pages edited on or after this ISO timestamp.",
-    ),
-) -> None:
-    db = resolve_database(db_url)
-    init_db(db)
-    with connect_db(db) as conn:
-        last_sync = since or get_setting(conn, "notion_last_sync") or get_setting(
-            conn, "notion_last_pull"
-        )
-        pages = fetch_notion_pages(since=last_sync)
-        synced = 0
-        max_edited: str | None = None
-        for page in pages:
-            edited = page.get("last_edited_time")
-            if edited and (max_edited is None or edited > max_edited):
-                max_edited = edited
-            parsed = parse_notion_statement(page)
-            if parsed is None:
-                continue
-            amount_cents = int(round(parsed["amount"] * 100))
-            source = source_from_account(parsed.get("account")) or (
-                parsed.get("account") or "notion"
-            )
-            upsert_statement(
-                conn,
-                source=source,
-                txn_date=parsed["transaction_date"],
-                post_date=parsed.get("payment_date"),
-                description=parsed["description"],
-                amount_cents=amount_cents,
-                currency="BRL",
-                raw_import_id=parsed["external_id"],
-                category=parsed.get("category"),
-                tags=parsed.get("tags"),
-            )
-            synced += 1
-        if max_edited:
-            upsert_setting(conn, "notion_last_sync", max_edited)
-            upsert_setting(conn, "notion_last_pull", max_edited)
-    typer.echo(f"Pulled {synced} statements from Notion")
+# @sync_app.command("pull")
+# def sync_pull(
+#         db_url: str = typer.Option(
+#             "finances.db",
+#             "--db",
+#             "-d",
+#             envvar="LOCAL_DATABASE_URL",
+#             help="SQLite database path for local cache.",
+#         ),
+#         since: str | None = typer.Option(
+#             None,
+#             "--since",
+#             "-s",
+#             help="Only pull Notion pages edited on or after this ISO timestamp.",
+#         ),
+# ) -> None:
+#     db = resolve_database(db_url)
+#     init_db(db)
+#     with connect_db(db) as conn:
+#         last_sync = since or get_setting(conn, "notion_last_sync") or get_setting(
+#             conn, "notion_last_pull"
+#         )
+#         pages = fetch_notion_pages(since=last_sync)
+#         synced = 0
+#         max_edited: str | None = None
+#         for page in pages:
+#             edited = page.get("last_edited_time")
+#             if edited and (max_edited is None or edited > max_edited):
+#                 max_edited = edited
+#             parsed = parse_notion_statement(page)
+#             if parsed is None:
+#                 continue
+#             amount_cents = int(round(parsed["amount"] * 100))
+#             source = source_from_account(parsed.get("account")) or (
+#                     parsed.get("account") or "notion"
+#             )
+#             upsert_statement(
+#                 conn,
+#                 source=source,
+#                 txn_date=parsed["transaction_date"],
+#                 post_date=parsed.get("payment_date"),
+#                 description=parsed["description"],
+#                 amount_cents=amount_cents,
+#                 currency="BRL",
+#                 raw_import_id=parsed["external_id"],
+#                 category=parsed.get("category"),
+#                 tags=parsed.get("tags"),
+#             )
+#             synced += 1
+#         if max_edited:
+#             upsert_setting(conn, "notion_last_sync", max_edited)
+#             upsert_setting(conn, "notion_last_pull", max_edited)
+#     typer.echo(f"Pulled {synced} statements from Notion")
 
 
-@sync_app.command("push")
-def sync_push(
-    db_url: str = typer.Option(
-        "finances.db",
-        "--db",
-        "-d",
-        envvar="LOCAL_DATABASE_URL",
-        help="SQLite database path for local cache.",
-    ),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        "-f",
-        help="Push all records instead of only those changed locally.",
-    ),
-    source: str | None = typer.Option(
-        None,
-        "--source",
-        help="Only push statements for this source.",
-    ),
-) -> None:
-    db = resolve_database(db_url)
-    init_db(db)
-    with connect_db(db) as conn:
-        statements = list_statements_with_categories(conn, source=source)
-        updated = 0
-        skipped = 0
-        reconciled = True
-        for raw_import_id, category in statements:
-            if not force:
-                last_state = get_notion_sync_state(conn, raw_import_id)
-                if last_state is not None:
-                    last_category, last_reconciled = last_state
-                    if last_category == category and last_reconciled == reconciled:
-                        skipped += 1
-                        continue
-            if update_notion_entry(
-                external_id=raw_import_id,
-                category=category,
-                reconciled=reconciled,
-            ):
-                upsert_notion_sync_state(
-                    conn,
-                    external_id=raw_import_id,
-                    category=category,
-                    reconciled=reconciled,
-                )
-                updated += 1
-            else:
-                skipped += 1
-    typer.echo(f"Pushed {updated} records to Notion ({skipped} skipped)")
+# @sync_app.command("push")
+# def sync_push(
+#         db_url: str = typer.Option(
+#             "finances.db",
+#             "--db",
+#             "-d",
+#             envvar="LOCAL_DATABASE_URL",
+#             help="SQLite database path for local cache.",
+#         ),
+#         force: bool = typer.Option(
+#             False,
+#             "--force",
+#             "-f",
+#             help="Push all records instead of only those changed locally.",
+#         ),
+#         source: str | None = typer.Option(
+#             None,
+#             "--source",
+#             help="Only push statements for this source.",
+#         ),
+# ) -> None:
+#     db = resolve_database(db_url)
+#     init_db(db)
+#     with connect_db(db) as conn:
+#         statements = list_statements_with_categories(conn, source=source)
+#         updated = 0
+#         skipped = 0
+#         reconciled = True
+#         for raw_import_id, category in statements:
+#             if not force:
+#                 last_state = get_notion_sync_state(conn, raw_import_id)
+#                 if last_state is not None:
+#                     last_category, last_reconciled = last_state
+#                     if last_category == category and last_reconciled == reconciled:
+#                         skipped += 1
+#                         continue
+#             if update_notion_entry(
+#                     external_id=raw_import_id,
+#                     category=category,
+#                     reconciled=reconciled,
+#             ):
+#                 upsert_notion_sync_state(
+#                     conn,
+#                     external_id=raw_import_id,
+#                     category=category,
+#                     reconciled=reconciled,
+#                 )
+#                 updated += 1
+#             else:
+#                 skipped += 1
+#     typer.echo(f"Pushed {updated} records to Notion ({skipped} skipped)")
 
 
 @category_app.command("find")
 def category_find(
-    ctx: typer.Context,
-    query: str = typer.Argument(..., help="Statement id or description glob."),
-    top: int = typer.Option(5, "--top", "-t", help="Top category suggestions."),
-    limit: int = typer.Option(
-        20, "--limit", "-n", help="Max statements to review for glob matches."
-    ),
-    prompt_file: Path = typer.Option(
-        Path("prompts/categorization_prompt.txt"),
-        "--prompt-file",
-        "-p",
-        help="Path to categorization prompt file.",
-    ),
+        ctx: typer.Context,
+        query: str = typer.Argument(..., help="Statement id or description glob."),
+        top: int = typer.Option(5, "--top", "-t", help="Top category suggestions."),
+        limit: int = typer.Option(
+            20, "--limit", "-n", help="Max statements to review for glob matches."
+        ),
+        prompt_file: Path = typer.Option(
+            Path("prompts/categorization_prompt.txt"),
+            "--prompt-file",
+            "-p",
+            help="Path to categorization prompt file.",
+        ),
 ) -> None:
     """Find a statement, suggest categories, and cache the selection."""
     db_url = ctx.parent.params["db_url"]
@@ -503,7 +492,7 @@ def category_find(
             )
             cached = get_categorization(conn, stmt.canonical_description)
             if cached is not None and all(
-                category != cached.category for category, _ in top_ranked
+                    category != cached.category for category, _ in top_ranked
             ):
                 top_ranked.insert(
                     0, (cached.category, (1.0, counts.get(cached.category, 0)))
@@ -544,14 +533,14 @@ def category_find(
 
 @category_app.command("manual")
 def category_manual(
-    ctx: typer.Context,
-    top: int = typer.Option(5, "--top", "-t", help="Top category suggestions."),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        "-f",
-        help="Ignore cached suggestions and always call AI.",
-    ),
+        ctx: typer.Context,
+        top: int = typer.Option(5, "--top", "-t", help="Top category suggestions."),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            "-f",
+            help="Ignore cached suggestions and always call AI.",
+        ),
 ) -> None:
     """Manually categorize statements starting with the most frequent descriptions."""
     db_url = ctx.parent.params["db_url"]
@@ -626,7 +615,7 @@ def category_manual(
                 top_ranked = _rank_categories(canonical, candidates, counts, top)
                 cached = get_categorization(conn, canonical)
                 if cached is not None and all(
-                    category != cached.category for category, _ in top_ranked
+                        category != cached.category for category, _ in top_ranked
                 ):
                     top_ranked.insert(
                         0, (cached.category, (1.0, counts.get(cached.category, 0)))
@@ -678,7 +667,7 @@ def category_manual(
 
 @category_app.command("recanon")
 def category_recanonicalize(
-    ctx: typer.Context,
+        ctx: typer.Context,
 ) -> None:
     """Recompute canonical descriptions for statements and cached categorizations."""
     db_url = ctx.parent.params["db_url"]
@@ -698,12 +687,12 @@ def category_recanonicalize(
 
 
 def _rank_categories(
-    canonical: str,
-    candidates: list[tuple[str, str]],
-    counts: dict[str, int],
-    top: int,
-    *,
-    use_similarity: bool = True,
+        canonical: str,
+        candidates: list[tuple[str, str]],
+        counts: dict[str, int],
+        top: int,
+        *,
+        use_similarity: bool = True,
 ) -> list[tuple[str, tuple[float, int]]]:
     if not candidates:
         return []
@@ -739,7 +728,7 @@ def _rank_categories(
 
 
 def _print_suggestions(
-    ranked: list[tuple[str, tuple[float, int]]],
+        ranked: list[tuple[str, tuple[float, int]]],
 ) -> None:
     if not ranked:
         typer.echo("Suggestions: none yet")
@@ -762,9 +751,9 @@ def _similarity_ratio(left: str, right: str) -> float:
 
 
 def _find_similar_categorization(
-    canonical: str,
-    candidates: list[tuple[str, str, str | None, str]],
-    threshold: float,
+        canonical: str,
+        candidates: list[tuple[str, str, str | None, str]],
+        threshold: float,
 ) -> tuple[str, str | None] | None:
     target = _normalize_similarity_text(canonical)
     if not target:
@@ -793,19 +782,19 @@ def _now_iso() -> str:
 
 @category_cache_app.command("export")
 def category_cache_export(
-    db_url: str = typer.Option(
-        "finances.db",
-        "--db",
-        "-d",
-        envvar="DATABASE_URL",
-        help="SQLite database path.",
-    ),
-    output: Path | None = typer.Option(
-        None,
-        "--file",
-        "-f",
-        help="Write cache export to a CSV file (defaults to stdout).",
-    ),
+        db_url: str = typer.Option(
+            "finances.db",
+            "--db",
+            "-d",
+            envvar="DATABASE_URL",
+            help="SQLite database path.",
+        ),
+        output: Path | None = typer.Option(
+            None,
+            "--file",
+            "-f",
+            help="Write cache export to a CSV file (defaults to stdout).",
+        ),
 ) -> None:
     """Export the categorization cache as CSV."""
     db = resolve_database(db_url)
@@ -837,19 +826,19 @@ def category_cache_export(
 
 @category_cache_app.command("import")
 def category_cache_import(
-    db_url: str = typer.Option(
-        "finances.db",
-        "--db",
-        "-d",
-        envvar="DATABASE_URL",
-        help="SQLite database path.",
-    ),
-    input_file: Path | None = typer.Option(
-        None,
-        "--file",
-        "-f",
-        help="Read cache import from a CSV file (defaults to stdin).",
-    ),
+        db_url: str = typer.Option(
+            "finances.db",
+            "--db",
+            "-d",
+            envvar="DATABASE_URL",
+            help="SQLite database path.",
+        ),
+        input_file: Path | None = typer.Option(
+            None,
+            "--file",
+            "-f",
+            help="Read cache import from a CSV file (defaults to stdin).",
+        ),
 ) -> None:
     """Import the categorization cache from CSV."""
     db = resolve_database(db_url)
@@ -911,13 +900,13 @@ def _read_single_key(prompt: str) -> str:
 
 @category_prompt_app.command("get")
 def prompt_get(
-    db_url: str = typer.Option(
-        "finances.db",
-        "--db",
-        "-d",
-        envvar="DATABASE_URL",
-        help="SQLite database path.",
-    ),
+        db_url: str = typer.Option(
+            "finances.db",
+            "--db",
+            "-d",
+            envvar="DATABASE_URL",
+            help="SQLite database path.",
+        ),
 ) -> None:
     """Print the categorization prompt stored in the database."""
     db = resolve_database(db_url)
@@ -931,19 +920,19 @@ def prompt_get(
 
 @category_prompt_app.command("set")
 def prompt_set(
-    db_url: str = typer.Option(
-        "finances.db",
-        "--db",
-        "-d",
-        envvar="DATABASE_URL",
-        help="SQLite database path.",
-    ),
-    prompt_file: Path | None = typer.Option(
-        None,
-        "--file",
-        "-f",
-        help="Path to prompt file to store in the database.",
-    ),
+        db_url: str = typer.Option(
+            "finances.db",
+            "--db",
+            "-d",
+            envvar="DATABASE_URL",
+            help="SQLite database path.",
+        ),
+        prompt_file: Path | None = typer.Option(
+            None,
+            "--file",
+            "-f",
+            help="Path to prompt file to store in the database.",
+        ),
 ) -> None:
     """Store the categorization prompt in the database."""
     if prompt_file:
@@ -961,10 +950,10 @@ def prompt_set(
 
 
 def _ai_ranked_suggestions(
-    description: str,
-    top: int,
-    *,
-    prompt_text: str,
+        description: str,
+        top: int,
+        *,
+        prompt_text: str,
 ) -> list[tuple[str, tuple[float, int]]]:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -1076,16 +1065,16 @@ def _normalize_header(value: str) -> str:
 
 
 def _ensure_no_itau_options(
-    *,
-    year: str | None,
-    total: str | None,
-    debug: bool,
-    sort: str | None,
-    layout: Layout | None,
-    merge: bool,
-    no_headers: bool,
-    enhanced: bool,
-    rename: bool,
+        *,
+        year: str | None,
+        total: str | None,
+        debug: bool,
+        sort: str | None,
+        layout: Layout | None,
+        merge: bool,
+        no_headers: bool,
+        enhanced: bool,
+        rename: bool,
 ) -> None:
     invalid = []
     if year:
@@ -1129,19 +1118,20 @@ def resolve_itau_inputs(input_path: str) -> list[Path]:
 
 
 def parse_itau(
-    input_paths: list[str],
-    year: str | None = None,
-    total: str | None = None,
-    debug: bool = False,
-    sort: str | None = None,
-    layout: Layout | None = None,
-    merge: bool = False,
-    no_headers: bool = False,
-    enhanced: bool = False,
-    output: Path | None = None,
-    rename: bool = False,
+        input_paths: list[str],
+        year: str | None = None,
+        total: str | None = None,
+        debug: bool = False,
+        sort: str | None = None,
+        layout: Layout | None = None,
+        merge: bool = False,
+        no_headers: bool = False,
+        enhanced: bool = False,
+        output: Path | None = None,
+        rename: bool = False,
 ) -> None:
     """Parse Itaú credit card PDF(s) into CSV lines (id: YYYY-MMM-index)."""
+
     def resolve_layout(payment_date: str | None) -> Layout:
         if layout is not None:
             return layout
