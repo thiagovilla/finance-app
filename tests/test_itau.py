@@ -2,12 +2,12 @@ import pytest
 
 from finance_cli.itau import (
     apply_id_schema,
-    blocks_to_statements,
+    _blocks_to_statements,
     check_total,
-    flip_sign_last_column,
+    _flip_sign_last_column,
     load_existing_rows,
-    match_to_csv,
-    find_total_in_text,
+    _match_to_csv,
+    _find_total_in_text,
     write_csv_lines_idempotent,
     _apply_marker,
     LineInfo,
@@ -16,13 +16,13 @@ from finance_cli.itau import (
 
 def test_match_to_csv_inserts_year_and_normalizes() -> None:
     raw = "01/02\nUber   Trip\n  -  12,34"
-    result = match_to_csv(raw, "25")
+    result = _match_to_csv(raw, "25")
     assert result == "01/02/25,Uber Trip,-12.34"
 
 
 def test_blocks_to_statements_extracts_lines() -> None:
     block = "01/02\nCoffee\n  10,00\n\n05/02\nMarket\n  20,50"
-    result = blocks_to_statements([block], "24", None)
+    result = _blocks_to_statements([block], "24", None)
     assert result == [
         "0,01/02/24,,Coffee,10.00",
         "1,05/02/24,,Market,20.50",
@@ -31,25 +31,25 @@ def test_blocks_to_statements_extracts_lines() -> None:
 
 def test_blocks_to_statements_normalizes_spaced_date_line() -> None:
     block = "19/1 2\nPOSTO SAO JOSELEMEBRA\n  5,00"
-    result = blocks_to_statements([block], "24", None)
+    result = _blocks_to_statements([block], "24", None)
     assert result == ["0,19/12/24,,POSTO SAO JOSELEMEBRA,5.00"]
 
 
 def test_blocks_to_statements_handles_thousands_amount() -> None:
     block = "22/12\nCASASBA*CASAS BAHIA\n- 2.249,00"
-    result = blocks_to_statements([block], "24", None)
+    result = _blocks_to_statements([block], "24", None)
     assert result == ["0,22/12/24,,CASASBA*CASAS BAHIA,-2249.00"]
 
 
 def test_blocks_to_statements_handles_installment_line() -> None:
     block = "15/01\nDELL\n12/12\n61,75"
-    result = blocks_to_statements([block], "24", None)
+    result = _blocks_to_statements([block], "24", None)
     assert result == ["0,15/01/24,,DELL 12/12,61.75"]
 
 
 def test_blocks_to_statements_handles_multiline_description() -> None:
     block = "24/11\nEBN\n*SPOTIFYCUR\n23,90"
-    result = blocks_to_statements([block], "25", None)
+    result = _blocks_to_statements([block], "25", None)
     assert result == ["0,24/11/25,,EBN *SPOTIFYCUR,23.90"]
 
 
@@ -60,7 +60,7 @@ def test_blocks_to_statements_captures_category_location_enhanced() -> None:
         "AIRLINE BARUERI\n"
         "lazer LEME\n"
     )
-    result = blocks_to_statements([block], "25", None, enhanced=True)
+    result = _blocks_to_statements([block], "25", None, enhanced=True)
     assert result == [
         "0,25/11/25,,Azul Linhas Aereas BraB,156.60,AIRLINE,BARUERI",
         "1,19/11/25,,NOEL LAZA RO TAUFIC CINL,20.00,lazer,LEME",
@@ -69,7 +69,7 @@ def test_blocks_to_statements_captures_category_location_enhanced() -> None:
 
 def test_blocks_to_statements_handles_spaced_date() -> None:
     block = "19/1 2\nPOSTO SAO JOSELEMEBRA\n  5,00"
-    result = blocks_to_statements([block], "24", None)
+    result = _blocks_to_statements([block], "24", None)
     assert result == ["0,19/12/24,,POSTO SAO JOSELEMEBRA,5.00"]
 
 
@@ -79,7 +79,7 @@ def test_flip_sign_last_column() -> None:
         "0,01/02/24,,Coffee,10.00",
         "1,02/02/24,,Refund,-5.00",
     ]
-    assert flip_sign_last_column(rows) == [
+    assert _flip_sign_last_column(rows) == [
         "0,01/02/24,,Coffee,-10.0",
         "1,02/02/24,,Refund,5.0",
     ]
@@ -109,7 +109,7 @@ def test_find_total_in_text_picks_last_match() -> None:
         "Other\n"
         "Total desta fatura\n10.532,52"
     )
-    assert find_total_in_text(text) == 10532.52
+    assert _find_total_in_text(text) == 10532.52
 
 
 def test_find_total_in_text_handles_spaced_label() -> None:
@@ -121,7 +121,7 @@ def test_find_total_in_text_handles_spaced_label() -> None:
         "06/01/2026\n"
         "R$ 18.412,00\n"
     )
-    assert find_total_in_text(text) == 9356.73
+    assert _find_total_in_text(text) == 9356.73
 
 
 def test_write_csv_lines_idempotent(tmp_path) -> None:

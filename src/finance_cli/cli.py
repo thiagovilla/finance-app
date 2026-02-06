@@ -15,17 +15,17 @@ import tty
 import typer
 
 from finance_cli.itau import (
-    blocks_to_statements,
+    _blocks_to_statements,
     blocks_to_statements_with_layout,
-    extract_blocks,
+    _extract_blocks,
     extract_blocks_with_layout,
-    extract_total_from_pdf,
-    extract_raw_text,
+    _extract_total_from_pdf,
+    _extract_raw_text,
     extract_emissao_year,
     extract_invoice_payment_date,
     extract_card_last4,
-    flip_sign_last_column,
-    localize_rows,
+    _flip_sign_last_column,
+    _localize_rows,
     check_total,
     write_csv_lines,
     write_csv_lines_idempotent,
@@ -1164,17 +1164,17 @@ def parse_itau(
             if len(pdf_paths) > 1:
                 outputs.append(f"=== {pdf_path} ===")
             if mode in {DebugMode.all, DebugMode.total}:
-                total_found = extract_total_from_pdf(pdf_path)
+                total_found = _extract_total_from_pdf(pdf_path)
                 if total_found is None:
                     outputs.append("total_scanned=None")
                 else:
                     outputs.append(f"total_scanned={total_found:.2f}")
             if mode in {DebugMode.all, DebugMode.raw}:
-                outputs.append(extract_raw_text(pdf_path))
+                outputs.append(_extract_raw_text(pdf_path))
             if mode in {DebugMode.all, DebugMode.normalized}:
-                from finance_cli.itau import normalize_pdf_text
-                raw_text = extract_raw_text(pdf_path)
-                outputs.append(normalize_pdf_text(raw_text))
+                from finance_cli.itau import _normalize_text
+                raw_text = _extract_raw_text(pdf_path)
+                outputs.append(_normalize_text(raw_text))
             if mode in {DebugMode.all, DebugMode.layout}:
                 resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
                 payment_date = extract_invoice_payment_date(pdf_path)
@@ -1285,12 +1285,12 @@ def parse_itau(
         resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
         payment_date = extract_invoice_payment_date(pdf_path)
         layout_for_pdf = resolve_layout(payment_date)
-        text_blocks = extract_blocks(pdf_path, layout_for_pdf)
-        statements = blocks_to_statements(
+        text_blocks = _extract_blocks(pdf_path, layout_for_pdf)
+        statements = _blocks_to_statements(
             text_blocks, resolved_year, payment_date, enhanced=enhanced
         )
         expected_total = (
-            manual_total if manual_total is not None else extract_total_from_pdf(pdf_path)
+            manual_total if manual_total is not None else _extract_total_from_pdf(pdf_path)
         )
 
         if expected_total is None:
@@ -1301,7 +1301,7 @@ def parse_itau(
             except ValueError as exc:
                 total_mismatches.append(f"{pdf_path}: {exc}")
 
-        rows = flip_sign_last_column(statements)
+        rows = _flip_sign_last_column(statements)
 
         if rename:
             last4 = extract_card_last4(pdf_path)
@@ -1327,7 +1327,7 @@ def parse_itau(
             all_rows.extend(rows)
         else:
             rows = sort_rows(rows)
-            rows = localize_rows(rows)
+            rows = _localize_rows(rows)
             if output is None:
                 per_file_output = pdf_path.with_suffix(".csv")
                 headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS
@@ -1345,7 +1345,7 @@ def parse_itau(
     if merge:
         if sort:
             all_rows = sort_rows(all_rows)
-        all_rows = localize_rows(all_rows)
+        all_rows = _localize_rows(all_rows)
         if output is None:
             headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS
             write_csv_lines(

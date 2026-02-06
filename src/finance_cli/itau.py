@@ -11,37 +11,29 @@ from typing import Iterable
 
 import fitz  # PyMuPDF
 
-TOTAL_PATTERNS = (
-    r"Total\s+desta\s+fatura\s*\n\s*(?:R\$)?\s*([\d\.]+,\d{2})",
-    r"O\s+total\s+da\s+sua\s+fatura\s+é:\s*\n?\s*R\$\s*([\d\.]+,\d{2})",
-    r"Total\s+da\s+fatura(?!\s+anterior)\s*\n?\s*(?:R\$)?\s*([\d\.]+,\d{2})",
-)
-CSV_HEADERS = ["index", "transaction_date", "payment_date", "description", "amount"]
-CSV_HEADERS_ENHANCED = CSV_HEADERS + ["category", "location"]
-EN_US_MONTH_ABBREVIATIONS = [
-    "JAN",
-    "FEB",
-    "MAR",
-    "APR",
-    "MAY",
-    "JUN",
-    "JUL",
-    "AUG",
-    "SEP",
-    "OCT",
-    "NOV",
-    "DEC",
+# --------------- CONSTANTS & TYPES ---------------
+
+CSV_HEADERS = ["id", "transaction_date", "payment_date", "description", "amount", "acc"]
+MONTH_ABBREVIATIONS = [
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
 ]
+
 
 class Layout(str, Enum):
     legacy = "legacy"
     modern = "modern"
 
 
+class Column(str, Enum):
+    left = "left"
+    right = "right"
+
+
 @dataclass(frozen=True)
 class BlockInfo:
     page: int
-    column: str
+    column: Column
     y0: float
     x0: float
     text: str
@@ -56,7 +48,166 @@ class LineInfo:
     text: str
 
 
-def extract_blocks(pdf_path: Path, layout: Layout = Layout.modern) -> list[str]:
+# --------------- FORMATTING & ID GENERATION (ADR 0004) ---------------
+
+def _generate_itau_id(date_str: str, index: int) -> str:
+    """Generates a deterministic ID: YYYY-MMM-index."""
+    try:
+        parsed = datetime.strptime(date_str, "%d/%m/%y")
+        year = parsed.strftime("%Y")
+        month = MONTH_ABBREVIATIONS[parsed.month - 1]
+    except ValueError:
+        year = "0000"
+        month = "UNK"
+    return f"{year}-{month}-{index}"
+
+
+def _match_to_csv(match: str, year: str) -> str:
+    """Normalize spacing, decimal separator, and inject year into DD/MM date."""
+    lines = match.splitlines()
+    if len(lines) >= 3:
+        date_line = re.sub(r"\s+", "", lines[0])
+        date_match = re.match(r"^(\d{1,2})/(\d{1,2})$", date_line)
+        if date_match:
+            date_part = f"{date_match.group(1)}/{date_match.group(2)}/{year}"
+            description = re.sub(r"\s{2,}", " ", lines[1]).strip()
+            amount_line = lines[2]
+            if len(lines) >= 4:
+                installment = re.sub(r"\s+", "", lines[2])
+                if re.match(r"^\d{1,2}/\d{1,2}$", installment):
+                    description = f"{description} {installment}"
+                    amount_line = lines[3]
+            amount = re.sub(r"\s+", "", amount_line).replace(",", ".")
+            amount = re.sub(r"-\s+(?=\d)", "-", amount)
+            return f"{date_part},{description},{amount}"
+    return match.replace("\n", ",")
+
+
+def _localize_rows(rows: Iterable[str]) -> list[str]:
+    """Standardizes dates to MM/DD/YY for the final CSV output."""
+    localized: list[str] = []
+    for row in rows:
+        parts = row.split(",")
+        if len(parts) < 6:
+            localized.append(row)
+            continue
+        row_id, txn_date, pay_date, desc, amount, acc = parts[:6]
+        extra = parts[6:]
+        localized.append(",".join([row_id, _dmy_to_mdy(txn_date), _dmy_to_mdy(pay_date), desc, amount, acc] + extra))
+    return localized
+
+
+def _flip_sign_last_column(csv_data: Iterable[str]) -> list[str]:
+    """Flips amount sign (spending is negative in DB, but often positive in PDFs)."""
+    new_data = []
+    for row in csv_data:
+        columns = row.split(",")
+        if len(columns) < 5:
+            new_data.append(row)
+            continue
+        try:
+            amount_value = float(columns[4])
+            columns[4] = f"{amount_value * -1:.2f}"
+        except ValueError:
+            pass
+        new_data.append(",".join(columns))
+    return new_data
+
+
+# --------------- STATEMENT EXTRACTION ---------------
+
+def _blocks_to_statements(blocks: Iterable[str], year: str, payment_date: str | None) -> list[str]:
+    statements: list[str] = []
+    index = 1
+    for block in blocks:
+        parsed, index = _parse_block_basic(block, year, payment_date, index)
+        statements.extend(parsed)
+    return statements
+
+
+def _parse_block_basic(block: str, year: str, payment_date: str | None, index: int) -> tuple[list[str], int]:
+    normalized_block = re.sub(r"(?m)^(\d{1,2})/(\d)\s+(\d)$", r"\1/\2\3", block)
+    lines = [line for line in normalized_block.splitlines() if line.strip()]
+    output_rows: list[str] = []
+    i = 0
+    while i < len(lines):
+        date_line = re.sub(r"\s+", "", lines[i])
+        if not re.match(r"^\d{1,2}/\d{1,2}$", date_line):
+            i += 1
+            continue
+        j, desc_lines, inst_line, amt_line = i + 1, [], None, None
+        while j < len(lines):
+            line = lines[j].strip()
+            amt = _normalize_amount_text(line)
+            if amt:
+                amt_line = amt
+                break
+            if re.match(r"^\d{1,2}/\d{1,2}$", re.sub(r"\s+", "", line)) and j + 1 < len(lines):
+                next_amt = _normalize_amount_text(lines[j + 1])
+                if next_amt:
+                    inst_line, amt_line = re.sub(r"\s+", "", line), next_amt
+                    j += 1
+                    break
+            desc_lines.append(line)
+            j += 1
+        if amt_line and desc_lines:
+            match = f"{date_line}\n{' '.join(desc_lines)}\n{inst_line or ''}\n{amt_line}".replace("\n\n", "\n")
+            d_part, desc, amt = _match_to_csv(match, year).split(",", 2)
+            row_id = _generate_itau_id(payment_date or d_part, index)
+            output_rows.append(f"{row_id},{d_part},{payment_date or ''},{desc},{amt},itau_cc")
+            index, i = index + 1, j + 1
+        else:
+            i += 1
+    return output_rows, index
+
+
+# --------------- METADATA EXTRACTION ---------------
+
+def _normalize_amount_text(amount: str) -> str | None:
+    cleaned = re.sub(r"\s+", "", amount)
+    if not re.match(r"^-?\d{1,3}(?:\.\d{3})*,\d{2}$", cleaned) and not re.match(r"^-?\d+,\d{2}$", cleaned):
+        return None
+    return cleaned.replace(".", "").replace(",", ".")
+
+
+def check_total(csv_data: Iterable[str], expected_total: float) -> None:
+    try:
+        total_sum = sum(float(row.split(",")[4]) for row in csv_data)
+        if round(total_sum, 2) != round(expected_total, 2):
+            raise ValueError(f"Total mismatch: expected {expected_total:.2f}, got {total_sum:.2f}")
+    except (IndexError, ValueError) as exc:
+        raise ValueError("Error validating totals.") from exc
+
+
+# --------------- I/O & IDEMPOTENCY ---------------
+
+def write_csv_lines_idempotent(rows: Iterable[str], output_path: Path, include_headers: bool = True,
+                               headers: list[str] | None = None) -> int:
+    headers = headers or CSV_HEADERS
+    existing_ids = set()
+    if output_path.exists():
+        with output_path.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames:
+                existing_ids = {r["id"] for r in reader if "id" in r}
+
+    added = 0
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    mode = "a" if output_path.exists() else "w"
+    with output_path.open(mode, newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if mode == "w" and include_headers:
+            writer.writerow(headers)
+        for row in rows:
+            parts = row.split(",")
+            if parts[0] not in existing_ids:
+                writer.writerow(parts)
+                existing_ids.add(parts[0])
+                added += 1
+    return added
+
+
+def _extract_blocks(pdf_path: Path, layout: Layout = Layout.modern) -> list[str]:
     """Extract text blocks from a PDF layout, stopping at the installment marker."""
     blocks: list[str] = []
     for _, page_blocks, marker in _iter_page_blocks(pdf_path, layout):
@@ -100,7 +251,7 @@ def extract_blocks(pdf_path: Path, layout: Layout = Layout.modern) -> list[str]:
 
 
 def extract_blocks_with_layout(
-    pdf_path: Path, layout: Layout = Layout.modern
+        pdf_path: Path, layout: Layout = Layout.modern
 ) -> list[BlockInfo]:
     """Extract text blocks with page/column metadata for a layout."""
     blocks: list[BlockInfo] = []
@@ -161,8 +312,10 @@ def extract_blocks_with_layout(
     return blocks
 
 
+# --------------- DEBUG ---------------
+
 def annotate_pdf_blocks(
-    pdf_path: Path, output_path: Path, layout: Layout = Layout.modern
+        pdf_path: Path, output_path: Path, layout: Layout = Layout.modern
 ) -> Path:
     """Write an annotated PDF with line rectangles and coordinates for a layout."""
     doc = fitz.open(pdf_path)
@@ -196,12 +349,6 @@ def annotate_pdf_blocks(
     doc.save(output_path)
     doc.close()
     return output_path
-
-
-def _normalize_text(text: str) -> str:
-    normalized = unicodedata.normalize("NFKD", re.sub(r"\s+", "", text))
-    normalized = "".join(char for char in normalized if not unicodedata.combining(char))
-    return normalized.lower()
 
 
 def _compute_split_x(words: list[tuple], page_rect: fitz.Rect) -> float:
@@ -282,8 +429,8 @@ def _extract_page_lines(page: fitz.Page, split_x: float) -> dict[str, list[LineI
 
 
 def _iter_page_lines(
-    pdf_path: Path,
-    layout: Layout = Layout.modern,
+        pdf_path: Path,
+        layout: Layout = Layout.modern,
 ) -> Iterable[tuple[int, dict[str, list[LineInfo]], dict[str, float | None]]]:
     """Yield per-page lines using the layout split."""
     start_marker = _normalize_text("lançamentos: compras e saques")
@@ -312,8 +459,8 @@ def _iter_page_lines(
 
 
 def _apply_marker(
-    page_lines: dict[str, list[LineInfo]],
-    marker: dict[str, float | None],
+        page_lines: dict[str, list[LineInfo]],
+        marker: dict[str, float | None],
 ) -> tuple[list[LineInfo], list[LineInfo]]:
     left_lines = page_lines["left"]
     right_lines = page_lines["right"]
@@ -344,13 +491,13 @@ def _extract_line_blocks(pdf_path: Path, layout: Layout = Layout.modern) -> list
 
 
 def _parse_statements_from_lines(
-    lines: list[LineInfo],
-    page_number: int,
-    column: str,
-    year: str,
-    payment_date: str | None,
-    statements: list[tuple[int, int, str, float, float, str]],
-    index: int,
+        lines: list[LineInfo],
+        page_number: int,
+        column: str,
+        year: str,
+        payment_date: str | None,
+        statements: list[tuple[int, int, str, float, float, str]],
+        index: int,
 ) -> int:
     i = 0
     while i < len(lines):
@@ -387,28 +534,31 @@ def _parse_statements_from_lines(
             match = f"{date_text}\n{desc_line.text}\n{amount_text}"
         else:
             match = f"{date_text}\n{desc_line.text}\n{installment_text}\n{amount_text}"
-        date_part, description, amount = match_to_csv(match, year).split(",", 2)
+        date_part, description, amount = _match_to_csv(match, year).split(",", 2)
         payment_field = payment_date or ""
-        row = f"{index},{date_part},{payment_field},{description},{amount}"
+        # Generate deterministic ID here according to ADR 0004
+        row_id = _generate_itau_id(payment_field or date_part, index)
+        row = f"{row_id},{date_part},{payment_field},{description},{amount},itau_cc"
         statements.append((index, page_number, column, date_line.x0, date_line.y0, row))
         index += 1
         i = k + 1
     return index
 
 
-def _normalize_amount_text(value: str) -> str | None:
-    cleaned = re.sub(r"\s+", "", value)
+def _normalize_amount_text(amount: str) -> str | None:
+    """Normalize amount text by removing whitespace and checking format."""
+    cleaned = re.sub(r"\s+", "", amount)
     if not cleaned:
         return None
     if not re.match(r"^-?\d{1,3}(?:\.\d{3})*,\d{2}$", cleaned) and not re.match(
-        r"^-?\d+,\d{2}$", cleaned
+            r"^-?\d+,\d{2}$", cleaned
     ):
         return None
     return cleaned.replace(".", "")
 
 
 def _parse_block_with_metadata(
-    block: str, year: str, payment_date: str | None, index: int
+        block: str, year: str, payment_date: str | None, index: int
 ) -> tuple[list[str], int]:
     normalized_block = re.sub(
         r"(?m)^(\d{1,2})/(\d)\s+(\d)$",
@@ -497,75 +647,20 @@ def _parse_block_with_metadata(
         else:
             match = f"{date_line}\n{desc_line}\n{amount_line}"
         payment_field = payment_date or ""
-        date_part, description, amount = match_to_csv(match, year).split(",", 2)
+        date_part, description, amount = _match_to_csv(match, year).split(",", 2)
         category = statement["category"] or ""
         location = statement["location"] or ""
+        row_id = _generate_itau_id(payment_field or date_part, index)
         output_rows.append(
-            f"{index},{date_part},{payment_field},{description},{amount},{category},{location}"
+            f"{row_id},{date_part},{payment_field},{description},{amount},itau_cc,{category},{location}"
         )
         index += 1
     return output_rows, index
 
 
-def _parse_block_basic(
-    block: str, year: str, payment_date: str | None, index: int
-) -> tuple[list[str], int]:
-    normalized_block = re.sub(
-        r"(?m)^(\d{1,2})/(\d)\s+(\d)$",
-        r"\1/\2\3",
-        block,
-    )
-    lines = [line for line in normalized_block.splitlines() if line.strip()]
-    output_rows: list[str] = []
-    i = 0
-    while i < len(lines):
-        date_line = re.sub(r"\s+", "", lines[i])
-        if not re.match(r"^\d{1,2}/\d{1,2}$", date_line):
-            i += 1
-            continue
-        j = i + 1
-        desc_lines: list[str] = []
-        installment_line = None
-        amount_line = None
-        while j < len(lines):
-            candidate = lines[j].strip()
-            candidate_norm = re.sub(r"\s+", "", candidate)
-            amount_text = _normalize_amount_text(candidate)
-            if amount_text is not None:
-                amount_line = amount_text
-                break
-            if re.match(r"^\d{1,2}/\d{1,2}$", candidate_norm):
-                k = j + 1
-                while k < len(lines) and not lines[k].strip():
-                    k += 1
-                if k < len(lines):
-                    next_amount = _normalize_amount_text(lines[k])
-                    if next_amount is not None:
-                        installment_line = candidate_norm
-                        amount_line = next_amount
-                        j = k
-                        break
-            desc_lines.append(candidate)
-            j += 1
-        if amount_line and desc_lines:
-            if installment_line:
-                desc_lines.append(installment_line)
-            match = f"{date_line}\n{' '.join(desc_lines)}\n{amount_line}"
-            payment_field = payment_date or ""
-            date_part, description, amount = match_to_csv(match, year).split(",", 2)
-            output_rows.append(
-                f"{index},{date_part},{payment_field},{description},{amount}"
-            )
-            index += 1
-            i = j + 1
-        else:
-            i += 1
-    return output_rows, index
-
-
 def _iter_page_blocks(
-    pdf_path: Path,
-    layout: Layout = Layout.modern,
+        pdf_path: Path,
+        layout: Layout = Layout.modern,
 ) -> Iterable[
     tuple[int, list[tuple[str, float, float, float, float, str]], dict[str, float | None]]
 ]:
@@ -617,7 +712,7 @@ def _iter_page_blocks(
 
 
 def _iter_pages_with_split(
-    doc: fitz.Document, layout: Layout = Layout.modern
+        doc: fitz.Document, layout: Layout = Layout.modern
 ) -> Iterable[tuple[int, fitz.Page, float]]:
     """Yield pages with a split X coordinate based on the layout."""
     cm_to_pt = 28.35
@@ -639,13 +734,13 @@ def _iter_pages_with_split(
         yield page_number, page, split_x_line
 
 
-def parse_brl_amount(value: str) -> float:
+def _parse_brl_amount(value: str) -> float:
     """Parse a BRL-formatted amount (1.234,56) into a float."""
     cleaned = value.strip().replace(".", "").replace(",", ".")
     return float(cleaned)
 
 
-def format_date_en_us(date_str: str) -> str:
+def _dmy_to_mdy(date_str: str) -> str:
     """Format DD/MM/YY to MM/DD/YY for CSV output."""
     if not date_str:
         return date_str
@@ -656,14 +751,29 @@ def format_date_en_us(date_str: str) -> str:
     return parsed.strftime("%m/%d/%y")
 
 
-def find_total_in_text(text: str) -> float | None:
+# --------------- TOTAL ---------------
+
+def _extract_total_from_pdf(pdf_path: Path) -> float | None:
+    """Extract the statement total from a PDF."""
+    doc = fitz.open(pdf_path)
+    text = "\n".join(page.get_text() for page in doc)
+    doc.close()
+    return _find_total_in_text(text)
+
+
+def _find_total_in_text(text: str) -> float | None:
     """Find the statement total in raw or normalized PDF text."""
-    for pattern in TOTAL_PATTERNS:
+    total_patterns = (
+        r"Total\s+desta\s+fatura\s*\n\s*(?:R\$)?\s*([\d\.]+,\d{2})",
+        r"O\s+total\s+da\s+sua\s+fatura\s+é:\s*\n?\s*R\$\s*([\d\.]+,\d{2})",
+        r"Total\s+da\s+fatura(?!\s+anterior)\s*\n?\s*(?:R\$)?\s*([\d\.]+,\d{2})",
+    )
+    for pattern in total_patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
         if match:
-            return parse_brl_amount(match.group(1))
+            return _parse_brl_amount(match.group(1))
 
-    normalized_text = normalize_pdf_text(text)
+    normalized_text = _normalize_text(text)
     labels = ("ototaldasuafaturae", "totaldestafatura")
     for label in labels:
         match = re.search(
@@ -672,12 +782,14 @@ def find_total_in_text(text: str) -> float | None:
             flags=re.DOTALL,
         )
         if match:
-            return parse_brl_amount(match.group(1))
+            return _parse_brl_amount(match.group(1))
     return None
 
 
-def normalize_pdf_text(text: str) -> str:
-    """Normalize PDF text by removing accents, lowercasing, and stripping whitespace."""
+# --------------- UTILS ---------------
+
+def _normalize_text(text: str) -> str:
+    """Normalize text by removing accents, lowercasing, and stripping whitespace."""
     normalized = unicodedata.normalize("NFKD", text)
     normalized = "".join(
         char for char in normalized if not unicodedata.combining(char)
@@ -685,21 +797,20 @@ def normalize_pdf_text(text: str) -> str:
     return re.sub(r"\s+", "", normalized)
 
 
-def extract_total_from_pdf(pdf_path: Path) -> float | None:
-    """Extract the statement total from a PDF."""
-    doc = fitz.open(pdf_path)
-    text = "\n".join(page.get_text() for page in doc)
-    doc.close()
-    return find_total_in_text(text)
+def _generate_itau_id(date_str: str, index: int) -> str:
+    """Helper to generate the YYYY-MMM-index ID."""
+    try:
+        # date_str is either DD/MM/YY (from match_to_csv) or payment_date
+        parsed = datetime.strptime(date_str, "%d/%m/%y")
+        year = parsed.strftime("%Y")
+        month = MONTH_ABBREVIATIONS[parsed.month - 1]
+    except ValueError:
+        year = "0000"
+        month = "UNK"
+    return f"{year}-{month}-{index}"
 
 
-def extract_raw_text(pdf_path: Path) -> str:
-    """Return the raw PDF text, separated by blank lines between pages."""
-    doc = fitz.open(pdf_path)
-    text = "\n\n".join(page.get_text() for page in doc)
-    doc.close()
-    return text
-
+# --------------- LAST 4 ---------------
 
 def extract_card_last4(pdf_path: Path) -> str | None:
     """Extract the last 4 digits of the card from the PDF text."""
@@ -720,7 +831,7 @@ def extract_card_last4(pdf_path: Path) -> str | None:
         if matches:
             return matches[-1]
 
-    normalized_text = normalize_pdf_text(text)
+    normalized_text = _normalize_text(text)
     matches = re.findall(
         r"(?:cartaofinal|cartaofinais|final|finais)(\d{4})", normalized_text
     )
@@ -755,7 +866,7 @@ def extract_invoice_payment_date(pdf_path: Path) -> str | None:
         r"Vencimento[^\d]{0,20}(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE
     )
     if not match:
-        normalized_text = normalize_pdf_text(text)
+        normalized_text = _normalize_text(text)
         match = re.search(
             r"vencimento.*?(\d{2}/\d{2}/\d{4})", normalized_text
         )
@@ -765,277 +876,3 @@ def extract_invoice_payment_date(pdf_path: Path) -> str | None:
         return datetime.strptime(match.group(1), "%d/%m/%Y").strftime("%d/%m/%y")
     except ValueError:
         return None
-
-
-def month_number_for_date(date_str: str) -> tuple[str, str] | None:
-    """Return (YYYY, MM) for a DD/MM/YY date string."""
-    if not date_str:
-        return None
-    try:
-        parsed = datetime.strptime(date_str, "%d/%m/%y")
-    except ValueError:
-        return None
-    return parsed.strftime("%Y"), parsed.strftime("%m")
-
-
-def blocks_to_statements(
-    blocks: Iterable[str],
-    year: str,
-    payment_date: str | None,
-    enhanced: bool = False,
-) -> list[str]:
-    """Process text blocks to extract raw statement entries.
-
-    Each statement pattern: DD/MM, newline, description, newline, price value.
-    """
-    statements: list[str] = []
-    index = 1
-    for block in blocks:
-        if enhanced:
-            parsed, index = _parse_block_with_metadata(block, year, payment_date, index)
-        else:
-            parsed, index = _parse_block_basic(block, year, payment_date, index)
-        statements.extend(parsed)
-    return statements
-
-
-def blocks_to_statements_with_layout(
-    blocks: Iterable[BlockInfo],
-    year: str,
-    payment_date: str | None,
-    enhanced: bool = False,
-) -> list[tuple[int, int, str, float, float, str]]:
-    """Process text blocks with layout metadata into statement entries."""
-    statements: list[tuple[int, int, str, float, float, str]] = []
-    index = 1
-    for block in blocks:
-        if enhanced:
-            parsed, index = _parse_block_with_metadata(
-                block.text, year, payment_date, index
-            )
-        else:
-            parsed, index = _parse_block_basic(block.text, year, payment_date, index)
-        for row in parsed:
-            row_index = row.split(",", 1)[0]
-            statements.append(
-                (
-                    int(row_index),
-                    block.page,
-                    block.column,
-                    block.x0,
-                    block.y0,
-                    row,
-                )
-            )
-    return statements
-
-
-def extract_statement_rows_with_layout(
-    pdf_path: Path,
-    year: str,
-    payment_date: str | None,
-    layout: Layout = Layout.modern,
-) -> list[tuple[int, int, str, float, float, str]]:
-    """Extract statement rows with page/column metadata using the layout split."""
-    statements: list[tuple[int, int, str, float, float, str]] = []
-    index = 1
-    for page_number, page_lines, marker in _iter_page_lines(pdf_path, layout):
-        left_lines, right_lines = _apply_marker(page_lines, marker)
-        index = _parse_statements_from_lines(
-            left_lines, page_number, "left", year, payment_date, statements, index
-        )
-        index = _parse_statements_from_lines(
-            right_lines, page_number, "right", year, payment_date, statements, index
-        )
-        if marker["left"] is not None or marker["right"] is not None:
-            break
-    return statements
-
-
-def match_to_csv(match: str, year: str) -> str:
-    """Normalize spacing, decimal separator, and inject year into DD/MM date."""
-    lines = match.splitlines()
-    if len(lines) >= 3:
-        date_line = re.sub(r"\s+", "", lines[0])
-        date_match = re.match(r"^(\d{1,2})/(\d{1,2})$", date_line)
-        if date_match:
-            date_part = f"{date_match.group(1)}/{date_match.group(2)}/{year}"
-            description = re.sub(r"\s{2,}", " ", lines[1]).strip()
-            amount_line = lines[2]
-            if len(lines) >= 4:
-                installment = re.sub(r"\s+", "", lines[2])
-                if re.match(r"^\d{1,2}/\d{1,2}$", installment):
-                    description = f"{description} {installment}"
-                    amount_line = lines[3]
-            amount = re.sub(r"\s+", "", amount_line).replace(",", ".")
-            amount = re.sub(r"-\s+(?=\d)", "-", amount)
-            return f"{date_part},{description},{amount}"
-
-    match = re.sub(r"\s{2,}", " ", match)
-    match = match.replace(",", ".")
-    match = match.replace("\n", ",")
-    match = re.sub(r"-\s+(?=\d)", "-", match)
-
-    if len(match) > 5:
-        match = match[:5] + "/" + year + match[5:]
-
-    return match
-
-
-def flip_sign_last_column(csv_data: Iterable[str]) -> list[str]:
-    """Flip the sign of the amount column for each CSV row."""
-    new_data = []
-    for row in csv_data:
-        columns = row.split(",", 6)
-        if len(columns) < 5:
-            new_data.append(row)
-            continue
-        try:
-            amount_value = float(columns[4].replace(",", "."))
-            columns[4] = str(amount_value * -1)
-        except ValueError:
-            pass
-        new_data.append(",".join(columns))
-    return new_data
-
-
-def localize_rows(rows: Iterable[str]) -> list[str]:
-    """Format date columns for en-US CSV output."""
-    localized: list[str] = []
-    for row in rows:
-        parts = row.split(",", 6)
-        if len(parts) < 5:
-            localized.append(row)
-            continue
-        row_id, transaction_date, payment_date, description, amount = parts[:5]
-        extra = parts[5:] if len(parts) > 5 else []
-        transaction_date = format_date_en_us(transaction_date)
-        payment_date = format_date_en_us(payment_date)
-        localized.append(
-            ",".join([row_id, transaction_date, payment_date, description, amount] + extra)
-        )
-    return localized
-
-
-def apply_id_schema(rows: Iterable[str]) -> list[str]:
-    """Replace index with an id using YYYY-MMM-(index)."""
-    months = EN_US_MONTH_ABBREVIATIONS
-    output: list[str] = []
-    for row in rows:
-        parts = row.split(",", 6)
-        if len(parts) < 5:
-            output.append(row)
-            continue
-        index, transaction_date, payment_date, description, amount = parts[:5]
-        extra = parts[5:] if len(parts) > 5 else []
-        date_source = payment_date.strip() or transaction_date
-        try:
-            parsed = datetime.strptime(date_source, "%d/%m/%y")
-            year = parsed.strftime("%Y")
-            month = months[parsed.month - 1]
-        except ValueError:
-            year = "0000"
-            month = "UNK"
-        try:
-            index_int = int(index)
-        except ValueError:
-            index_int = 0
-        row_id = f"{year}-{month}-{index_int + 1}"
-        output.append(
-            ",".join([row_id, transaction_date, payment_date, description, amount] + extra)
-        )
-    return output
-
-
-def check_total(csv_data: Iterable[str], expected_total: float) -> None:
-    """Raise if the sum of amounts does not match the expected total."""
-    try:
-        total_sum = sum(float(row.split(",")[4]) for row in csv_data)
-    except (IndexError, ValueError) as exc:
-        raise ValueError("Error parsing numbers from the fifth column.") from exc
-
-    if round(total_sum, 2) != round(expected_total, 2):
-        raise ValueError(
-            "Total mismatch: expected {:.2f}, got {:.2f}. Difference: {:.2f}".format(
-                expected_total, total_sum, expected_total - total_sum
-            )
-        )
-
-
-def write_csv_lines(
-    rows: Iterable[str],
-    output_path: Path | None,
-    include_headers: bool = True,
-    headers: list[str] | None = None,
-) -> None:
-    """Write CSV rows to stdout or a file."""
-    headers = headers or CSV_HEADERS
-    if output_path is None:
-        if include_headers:
-            print(",".join(headers))
-        for line in rows:
-            print(line)
-        return
-
-    with output_path.open("w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.writer(csvfile)
-        if include_headers:
-            writer.writerow(headers)
-        for row in rows:
-            writer.writerow(row.split(","))
-
-
-def load_existing_rows(output_path: Path, headers: list[str] | None = None) -> set[str]:
-    """Load existing rows from a CSV file, excluding headers."""
-    if not output_path.exists():
-        return set()
-
-    headers = headers or CSV_HEADERS
-    with output_path.open("r", newline="", encoding="utf-8") as csvfile:
-        reader = csv.reader(csvfile)
-        return {
-            ",".join(row)
-            for row in reader
-            if row and row != headers
-        }
-
-
-def write_csv_lines_idempotent(
-    rows: Iterable[str],
-    output_path: Path,
-    include_headers: bool = True,
-    headers: list[str] | None = None,
-) -> int:
-    """Append rows to a CSV file, skipping rows already present."""
-    headers = headers or CSV_HEADERS
-    existing_rows = load_existing_rows(output_path, headers=headers)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    added = 0
-    with output_path.open("a", newline="", encoding="utf-8") as csvfile:
-        writer = csv.writer(csvfile)
-        if include_headers and (not output_path.exists() or output_path.stat().st_size == 0):
-            writer.writerow(headers)
-        for row in rows:
-            if row in existing_rows:
-                continue
-            writer.writerow(row.split(","))
-            existing_rows.add(row)
-            added += 1
-    return added
-
-
-def parse_itau_pdf(
-    pdf_path: Path, year: str | None = None, total: float | None = None
-) -> list[str]:
-    """Parse a single Itau PDF into CSV rows."""
-    resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
-    payment_date = extract_invoice_payment_date(pdf_path)
-
-    text_blocks = extract_blocks(pdf_path)
-    statements = blocks_to_statements(text_blocks, resolved_year, payment_date)
-
-    if total is not None:
-        check_total(statements, total)
-
-    return flip_sign_last_column(statements)
