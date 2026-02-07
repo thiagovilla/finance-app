@@ -22,7 +22,7 @@ from finance_cli.itau import (
     _extract_total_from_pdf,
     _extract_raw_text,
     extract_emissao_year,
-    extract_invoice_payment_date,
+    extract_payment_date,
     extract_card_last4,
     _flip_sign_last_column,
     _localize_rows,
@@ -1177,7 +1177,7 @@ def parse_itau(
                 outputs.append(_normalize_text(raw_text))
             if mode in {DebugMode.all, DebugMode.layout}:
                 resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
-                payment_date = extract_invoice_payment_date(pdf_path)
+                payment_date = extract_payment_date(pdf_path)
                 layout_for_pdf = resolve_layout(payment_date)
                 outputs.append(
                     f"layout_resolved={layout_for_pdf.value}, payment_date={payment_date or ''}"
@@ -1208,7 +1208,7 @@ def parse_itau(
                             f"{page},{column},{parts[0]},{x0:.2f},{y0:.2f},{parts[1]},{parts[2]},{parts[3]},{parts[4]}"
                         )
             if mode in {DebugMode.all, DebugMode.annotate}:
-                payment_date = extract_invoice_payment_date(pdf_path)
+                payment_date = extract_payment_date(pdf_path)
                 layout_for_pdf = resolve_layout(payment_date)
                 annotated_path = pdf_path.with_name(f"{pdf_path.stem}_annotated.pdf")
                 annotate_pdf_blocks(pdf_path, annotated_path, layout_for_pdf)
@@ -1283,7 +1283,7 @@ def parse_itau(
 
     for pdf_path in pdf_paths:
         resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
-        payment_date = extract_invoice_payment_date(pdf_path)
+        payment_date = extract_payment_date(pdf_path)
         layout_for_pdf = resolve_layout(payment_date)
         text_blocks = _extract_blocks(pdf_path, layout_for_pdf)
         statements = _blocks_to_statements(

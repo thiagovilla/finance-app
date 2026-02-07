@@ -7,9 +7,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, List
 
 import fitz  # PyMuPDF
+
+# this file should be organized like this:
+# 1. pdf -> blocks: open PDF, define layout, get metadata, check markers
+# 2. blocks -> statements: parse block text into statement objects
+# 3. statements -> prepared data: get data ready in memory
+# 4. prepared data -> CSV: write data to CSV file
 
 # --------------- CONSTANTS & TYPES ---------------
 
@@ -40,12 +46,100 @@ class BlockInfo:
 
 
 @dataclass(frozen=True)
-class LineInfo:
+class LineInfo:  # TODO: what is this used for?
     y0: float
     x0: float
     y1: float
     x1: float
     text: str
+
+
+# --------------- 1. PDF PARSING ---------------
+
+# Goal: Open PDF, define layout, get metadata, check markers
+
+# 1. Open PDF and extract all text
+# 2. Find metadata (last 4 digits, total, payment date)
+# 3. Split content left/right columns
+# 4. Parse blocks in order (inverted N) between start and stop markers
+
+def get_pdf_text(pdf_path: str) -> str:
+    """Extracts all text from a PDF file."""
+    with fitz.open(pdf_path) as pdf:
+        return "\n".join(page.get_text() for page in pdf)
+
+
+def extract_last4(pdf_text: str) -> str | None:
+    """Extract the last 4 digits of the card from the PDF text (XXXX.1234)."""
+    masked_match = re.findall(r"X{4}\.(\d{4})", pdf_text, flags=re.IGNORECASE)
+    if masked_match:
+        return masked_match[-1]
+
+    # TODO: Needed?
+    # patterns = (
+    #     r"(?:final|finais)\s*[:\-]?\s*(\d{4})",
+    #     r"(?:Cart[aã]o|Cartao)[^\d]{0,20}(\d{4})",
+    # )
+    # for pattern in patterns:
+    #     matches = re.findall(pattern, text, flags=re.IGNORECASE)
+    #     if matches:
+    #         return matches[-1]
+    #
+    # normalized_text = _normalize_text(text)
+    # matches = re.findall(
+    #     r"(?:cartaofinal|cartaofinais|final|finais)(\d{4})", normalized_text
+    # )
+    # if matches:
+    #     return matches[-1]
+    # matches = re.findall(r"cartao(\d{4})", normalized_text)
+    # if matches:
+    #     return matches[-1]
+    return None
+
+
+def extract_total(text: str) -> float | None:
+    """Find the statement total in raw or normalized PDF text."""
+    total_patterns = (
+        r"Total\s+desta\s+fatura\s*\n\s*(?:R\$)?\s*([\d\.]+,\d{2})",
+        r"O\s+total\s+da\s+sua\s+fatura\s+é:\s*\n?\s*R\$\s*([\d\.]+,\d{2})",
+        r"Total\s+da\s+fatura(?!\s+anterior)\s*\n?\s*(?:R\$)?\s*([\d\.]+,\d{2})",
+    )
+    for pattern in total_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
+        if match:
+            return _parse_brl_amount(match.group(1))
+
+    # TODO: Needed?
+    # normalized_text = _normalize_text(text)
+    # labels = ("ototaldasuafaturae", "totaldestafatura")
+    # for label in labels:
+    #     match = re.search(
+    #         rf"{label}.{{0,200}}?(?:r\$)?([\d.]+,\d{{2}})",
+    #         normalized_text,
+    #         flags=re.DOTALL,
+    #     )
+    #     if match:
+    #         return _parse_brl_amount(match.group(1))
+    return None
+
+
+def extract_payment_date(text: str) -> datetime | None:
+    """Extract the invoice payment date after "vencimento"."""
+    match = re.search(
+        r"Vencimento\D{0,20}(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE # TODO: What is \D{0,20} for?
+    )
+    # TODO: Shouldn't we match against normalized text first?
+    if not match:
+        normalized_text = _normalize_text(text)
+        match = re.search(
+            r"vencimento.*?(\d{2}/\d{2}/\d{4})", normalized_text
+        )
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%d/%m/%Y")
+    except ValueError:
+        return None
 
 
 # --------------- FORMATTING & ID GENERATION (ADR 0004) ---------------
@@ -751,41 +845,6 @@ def _dmy_to_mdy(date_str: str) -> str:
     return parsed.strftime("%m/%d/%y")
 
 
-# --------------- TOTAL ---------------
-
-def _extract_total_from_pdf(pdf_path: Path) -> float | None:
-    """Extract the statement total from a PDF."""
-    doc = fitz.open(pdf_path)
-    text = "\n".join(page.get_text() for page in doc)
-    doc.close()
-    return _find_total_in_text(text)
-
-
-def _find_total_in_text(text: str) -> float | None:
-    """Find the statement total in raw or normalized PDF text."""
-    total_patterns = (
-        r"Total\s+desta\s+fatura\s*\n\s*(?:R\$)?\s*([\d\.]+,\d{2})",
-        r"O\s+total\s+da\s+sua\s+fatura\s+é:\s*\n?\s*R\$\s*([\d\.]+,\d{2})",
-        r"Total\s+da\s+fatura(?!\s+anterior)\s*\n?\s*(?:R\$)?\s*([\d\.]+,\d{2})",
-    )
-    for pattern in total_patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
-        if match:
-            return _parse_brl_amount(match.group(1))
-
-    normalized_text = _normalize_text(text)
-    labels = ("ototaldasuafaturae", "totaldestafatura")
-    for label in labels:
-        match = re.search(
-            rf"{label}.{{0,200}}?(?:r\$)?([\d.]+,\d{{2}})",
-            normalized_text,
-            flags=re.DOTALL,
-        )
-        if match:
-            return _parse_brl_amount(match.group(1))
-    return None
-
-
 # --------------- UTILS ---------------
 
 def _normalize_text(text: str) -> str:
@@ -812,36 +871,6 @@ def _generate_itau_id(date_str: str, index: int) -> str:
 
 # --------------- LAST 4 ---------------
 
-def extract_card_last4(pdf_path: Path) -> str | None:
-    """Extract the last 4 digits of the card from the PDF text."""
-    doc = fitz.open(pdf_path)
-    text = "\n".join(page.get_text() for page in doc)
-    doc.close()
-
-    masked_match = re.findall(r"X{4}\.(\d{4})", text, flags=re.IGNORECASE)
-    if masked_match:
-        return masked_match[-1]
-
-    patterns = (
-        r"(?:final|finais)\s*[:\-]?\s*(\d{4})",
-        r"(?:Cart[aã]o|Cartao)[^\d]{0,20}(\d{4})",
-    )
-    for pattern in patterns:
-        matches = re.findall(pattern, text, flags=re.IGNORECASE)
-        if matches:
-            return matches[-1]
-
-    normalized_text = _normalize_text(text)
-    matches = re.findall(
-        r"(?:cartaofinal|cartaofinais|final|finais)(\d{4})", normalized_text
-    )
-    if matches:
-        return matches[-1]
-    matches = re.findall(r"cartao(\d{4})", normalized_text)
-    if matches:
-        return matches[-1]
-    return None
-
 
 def extract_emissao_year(pdf_path: Path) -> str | None:
     """Extract the two-digit year from the Emissao date in the PDF."""
@@ -853,26 +882,5 @@ def extract_emissao_year(pdf_path: Path) -> str | None:
         return None
     try:
         return datetime.strptime(match.group(1), "%d/%m/%Y").strftime("%y")
-    except ValueError:
-        return None
-
-
-def extract_invoice_payment_date(pdf_path: Path) -> str | None:
-    """Extract the payment due date in DD/MM/YY format."""
-    doc = fitz.open(pdf_path)
-    text = "\n".join(page.get_text() for page in doc)
-    doc.close()
-    match = re.search(
-        r"Vencimento[^\d]{0,20}(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE
-    )
-    if not match:
-        normalized_text = _normalize_text(text)
-        match = re.search(
-            r"vencimento.*?(\d{2}/\d{2}/\d{4})", normalized_text
-        )
-    if not match:
-        return None
-    try:
-        return datetime.strptime(match.group(1), "%d/%m/%Y").strftime("%d/%m/%y")
     except ValueError:
         return None

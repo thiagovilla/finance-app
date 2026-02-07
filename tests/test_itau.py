@@ -7,7 +7,7 @@ from finance_cli.itau import (
     _flip_sign_last_column,
     load_existing_rows,
     _match_to_csv,
-    _find_total_in_text,
+    extract_total,
     write_csv_lines_idempotent,
     _apply_marker,
     LineInfo,
@@ -109,7 +109,7 @@ def test_find_total_in_text_picks_last_match() -> None:
         "Other\n"
         "Total desta fatura\n10.532,52"
     )
-    assert _find_total_in_text(text) == 10532.52
+    assert extract_total(text) == 10532.52
 
 
 def test_find_total_in_text_handles_spaced_label() -> None:
@@ -121,7 +121,7 @@ def test_find_total_in_text_handles_spaced_label() -> None:
         "06/01/2026\n"
         "R$ 18.412,00\n"
     )
-    assert _find_total_in_text(text) == 9356.73
+    assert extract_total(text) == 9356.73
 
 
 def test_write_csv_lines_idempotent(tmp_path) -> None:
