@@ -7,6 +7,7 @@ from finance_cli.itau import get_pdf_text
 from itau_pdf.debug import annotate_pdf
 from itau_pdf.layout import iter_pdf, get_layout
 from itau_pdf import metadata
+from itau_pdf.statements import _parse_lines
 from itau_pdf.utils import normalize_text
 
 app = typer.Typer(help="Debug entrypoint for personal finance CLI.")
@@ -53,6 +54,12 @@ def debug_itau_pdf(
             outputs.append(
                 # f"[P{line.page} {line.column.value}] ({line.x0:.1f}, {line.y0:.1f}): {line.text}"
                 f"({line.x0:.1f}, {line.y0:.1f}): {line.text}"
+            )
+
+        outputs.append("\n--- STATEMENTS ---")
+        for index, statement in enumerate(_parse_lines(iter_pdf(str(pdf_path), get_layout(pay_date))), start=1):
+            outputs.append(
+                f"{index} ({statement.date:%d/%m/%Y}) / {statement.description} / R$ {statement.amount:.2f} / {statement.category} / {statement.location or "-"}"
             )
 
         annotate_pdf(str(pdf_path))
