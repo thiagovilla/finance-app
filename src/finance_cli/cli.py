@@ -1172,9 +1172,9 @@ def parse_itau(
             if mode in {DebugMode.all, DebugMode.raw}:
                 outputs.append(_extract_raw_text(pdf_path))
             if mode in {DebugMode.all, DebugMode.normalized}:
-                from finance_cli.itau import _normalize_text
+                from finance_cli.itau import normalize_text
                 raw_text = _extract_raw_text(pdf_path)
-                outputs.append(_normalize_text(raw_text))
+                outputs.append(normalize_text(raw_text))
             if mode in {DebugMode.all, DebugMode.layout}:
                 resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
                 payment_date = extract_payment_date(pdf_path)

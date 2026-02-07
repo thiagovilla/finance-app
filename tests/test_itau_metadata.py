@@ -1,11 +1,12 @@
 import unittest
 from unittest.mock import MagicMock, patch
 from datetime import datetime
-from finance_cli.itau import get_pdf_text, extract_last4, extract_total, extract_payment_date
+
+from finance_cli.itau import get_pdf_text
+from itau.metadata import extract_last4, extract_total, extract_payment_date, extract_issue_date
 
 
-class TestItauParsers(unittest.TestCase):
-
+class TestItauMetadata(unittest.TestCase):
     @patch("fitz.open")
     def test_get_pdf_text(self, mock_open):
         # Setup mock PDF structure
@@ -60,6 +61,15 @@ class TestItauParsers(unittest.TestCase):
         # Test invalid date/no match
         self.assertIsNone(extract_payment_date("Vencimento 99/99/9999"))
         self.assertIsNone(extract_payment_date("No date here"))
+
+    def test_extract_issue_date(self):
+        # Test standard match
+        text = "Emissão 15/09/2025"
+        self.assertEqual(extract_issue_date(text), datetime(2025, 9, 15))
+
+        # Test invalid date/no match
+        self.assertIsNone(extract_issue_date("Emissão 99/99/9999"))
+        self.assertIsNone(extract_issue_date("No date here"))
 
 
 if __name__ == "__main__":
