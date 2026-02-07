@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
 
-from itau.utils import normalize_text, parse_brl_amount
+from itau_pdf.utils import normalize_text, parse_brl_amount
 
 
 def extract_last4(pdf_text: str) -> str | None:

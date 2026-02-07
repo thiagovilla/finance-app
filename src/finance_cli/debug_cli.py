@@ -1,24 +1,24 @@
 from __future__ import annotations
 from pathlib import Path
-from datetime import datetime
 import typer
 
 from finance_cli.cli import resolve_itau_inputs
 from finance_cli.itau import get_pdf_text
-from itau.layout_blocks import iter_pdf_blocks, Layout as ItauLayout, get_layout
-from itau import metadata
-from itau.utils import normalize_text
+from itau_pdf.debug import annotate_pdf
+from itau_pdf.layout import iter_pdf, get_layout
+from itau_pdf import metadata
+from itau_pdf.utils import normalize_text
 
 app = typer.Typer(help="Debug entrypoint for personal finance CLI.")
 
-@app.command("itau")
-def debug_cli(
+@app.command("itau_pdf")
+def debug_itau_pdf(
         input_path: str = typer.Argument(..., help="Itaú PDF to debug."),
         output: Path | None = typer.Option(
             None, "--output", "-o", help="Write debug output to file."
         ),
 ) -> None:
-    """Dump raw text, normalized text, metadata and layout blocks for Itaú PDFs."""
+    """Dump raw text, normalized text, metadata, lines, and annotated PDF for Itaú PDFs."""
     pdf_paths = resolve_itau_inputs(input_path)
     outputs: list[str] = []
 
@@ -27,7 +27,7 @@ def debug_cli(
             outputs.append(f"=== {pdf_path} ===")
 
         # 1. Raw Text
-        raw_text = get_pdf_text(pdf_path)
+        raw_text = get_pdf_text(str(pdf_path))
         outputs.append("--- RAW TEXT ---")
         outputs.append(raw_text)
 
@@ -47,12 +47,15 @@ def debug_cli(
         outputs.append(f"Payment Date: {pay_date}")
         outputs.append(f"Issue Date: {issue_date}")
 
-        # 4. List of Lines (using new layout logic)
-        outputs.append("\n--- LINES (Layout Blocks) ---")
-        for block in iter_pdf_blocks(str(pdf_path), layout=get_layout(issue_date)):
+        # 4. Lines (using new layout logic)
+        outputs.append("\n--- LINES ---")
+        for line in iter_pdf(str(pdf_path), get_layout(pay_date)):
             outputs.append(
-                f"[P{block.page} {block.column.value}] ({block.x0:.1f}, {block.y0:.1f}): {block.text}"
+                # f"[P{line.page} {line.column.value}] ({line.x0:.1f}, {line.y0:.1f}): {line.text}"
+                f"({line.x0:.1f}, {line.y0:.1f}): {line.text}"
             )
+
+        annotate_pdf(str(pdf_path))
 
     debug_output = "\n".join(outputs)
     if output is None:

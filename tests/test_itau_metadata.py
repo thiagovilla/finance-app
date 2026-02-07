@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 from datetime import datetime
 
 from finance_cli.itau import get_pdf_text
-from itau.metadata import extract_last4, extract_total, extract_payment_date, extract_issue_date
+from itau_pdf.metadata import extract_last4, extract_total, extract_payment_date, extract_issue_date
 
 
 class TestItauMetadata(unittest.TestCase):

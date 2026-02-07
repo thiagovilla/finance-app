@@ -125,7 +125,7 @@ def test_find_total_in_text_handles_spaced_label() -> None:
 
 
 def test_write_csv_lines_idempotent(tmp_path) -> None:
-    output_path = tmp_path / "itau.csv"
+    output_path = tmp_path / "itau_pdf.csv"
     rows = ["0,01/02/24,,Coffee,-10.0", "1,02/02/24,,Market,-5.0"]
     added_first = write_csv_lines_idempotent(rows, output_path, include_headers=False)
     added_second = write_csv_lines_idempotent(rows, output_path, include_headers=False)

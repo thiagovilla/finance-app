@@ -53,8 +53,8 @@ from finance_cli.db import (
     upsert_categorization_full,
 )
 from finance_cli.notion_cli import notion_app
-from itau.layout_blocks import Layout
-from itau.utils import parse_brl_amount
+from itau_pdf.layout import Layout
+from itau_pdf.utils import parse_brl_amount
 
 app = typer.Typer(help="Personal finance CLI.")
 
@@ -1015,7 +1015,7 @@ def _detect_source_from_csv(csv_path: Path) -> Source | None:
         return None
 
     name = csv_path.name.lower()
-    if "itau" in name:
+    if "itau_pdf" in name:
         return Source.itau_cc
     if "nubank" in name or "nu_" in name or name.startswith("nu"):
         if any(token in name for token in ["conta", "checking", "chk", "account", "nu_acc", "nubank_ca", "nubank_chk"]):

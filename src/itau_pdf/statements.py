@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterator
 
-from itau.layout_blocks import Block
+from itau_pdf.layout import Block
 
 
 @dataclass(frozen=True)

@@ -8,7 +8,7 @@ from typing import Iterable
 
 import fitz  # PyMuPDF
 
-from itau.utils import dmy_to_mdy
+from itau_pdf.utils import dmy_to_mdy
 
 # this file should be organized like this:
 # 1. pdf -> blocks: open PDF, define layout, get metadata, check markers
@@ -247,62 +247,6 @@ def write_csv_lines_idempotent(rows: Iterable[str], output_path: Path, include_h
 #     return blocks
 
 
-# --------------- DEBUG ---------------
-
-# def annotate_pdf_blocks(
-#         pdf_path: Path, output_path: Path, layout: Layout = Layout.modern
-# ) -> Path:
-#     """Write an annotated PDF with line rectangles and coordinates for a layout."""
-#     doc = fitz.open(pdf_path)
-#     for page_number, page, split_x in _iter_pages(doc, layout):
-#         page_rect = page.rect
-#         page.draw_line(
-#             fitz.Point(split_x, page_rect.y0),
-#             fitz.Point(split_x, page_rect.y1),
-#             color=(0, 0.6, 0),
-#             width=0.5,
-#         )
-#         page.insert_text(
-#             fitz.Point(split_x + 2, page_rect.y0 + 8),
-#             f"split_x={split_x:.2f}",
-#             fontsize=7,
-#             color=(0, 0.6, 0),
-#         )
-#         page_lines = _extract_page_lines(page, split_x)
-#         for column, lines in page_lines.items():
-#             color = (1, 0, 0) if column == "right" else (0, 0, 1)
-#             for line in lines:
-#                 rect = fitz.Rect(line.x0, line.y0, line.x1, line.y1)
-#                 page.draw_rect(rect, color=color, width=0.5)
-#                 label = f"{line.x0:.2f},{line.y0:.2f}"
-#                 page.insert_text(
-#                     fitz.Point(line.x0, max(line.y0 - 4, page_rect.y0 + 6)),
-#                     label,
-#                     fontsize=6,
-#                     color=color,
-#                 )
-#     doc.save(output_path)
-#     doc.close()
-#     return output_path
-
-
-# This is debug
-# def _apply_marker(
-#         page_lines: dict[str, list[Line]],
-#         marker: dict[str, float | None],
-# ) -> tuple[list[Line], list[Line]]:
-#     left_lines = page_lines["left"]
-#     right_lines = page_lines["right"]
-#     if marker.get("start_left") is not None:
-#         left_lines = [line for line in left_lines if line.y0 > marker["start_left"]]
-#     if marker.get("start_right") is not None:
-#         right_lines = [line for line in right_lines if line.y0 > marker["start_right"]]
-#     if marker["left"] is not None:
-#         left_lines = [line for line in left_lines if line.y0 < marker["left"]]
-#         right_lines = []
-#     elif marker["right"] is not None:
-#         right_lines = [line for line in right_lines if line.y0 < marker["right"]]
-#     return left_lines, right_lines
 
 
 # def _parse_statements_from_lines(

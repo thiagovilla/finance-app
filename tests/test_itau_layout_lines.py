@@ -1,5 +1,5 @@
 import unittest
-from itau.layout_lines import Word, Line, group_words_into_lines, _calc_y_tol
+from itau_pdf.layout_lines import Word, Line, group_words_into_lines, _calc_y_tol
 
 
 class TestItauLines(unittest.TestCase):

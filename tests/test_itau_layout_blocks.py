@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
-from itau.layout_blocks import Page, Column, Block, _check_marker, _split_into_columns, _iter_blocks
-from itau.layout_lines import Line
+from itau_pdf.layout import Page, Column, Block, _check_marker, _split_columns, _iter_lines
+from itau_pdf.layout_lines import Line
 
 
 class TestItauBlocks(unittest.TestCase):
@@ -27,13 +27,13 @@ class TestItauBlocks(unittest.TestCase):
         left_line = Line(y0=100, x0=10, y1=110, x1=20, text="Hello")
         right_line = Line(y0=100, x0=300, y1=110, x1=315, text="World")
 
-        with patch('itau.layout_blocks._split_into_columns') as mock_split:
+        with patch('itau_pdf.layout_blocks._split_into_columns') as mock_split:
             mock_split.return_value = {
                 Column.left: [left_line],
                 Column.right: [right_line]
             }
 
-            blocks = list(_iter_blocks(mock_page))
+            blocks = list(_iter_lines(mock_page))
 
             self.assertEqual(len(blocks), 2)
             # Order should be Left then Right
@@ -54,13 +54,13 @@ class TestItauBlocks(unittest.TestCase):
         ]
 
         # Page with split at 200
-        page = Page(index=0, object=mock_page_obj, x_split=200.0)
+        page = Page(index=0, pdf=mock_page_obj, x_split=200.0)
 
-        with patch('itau.layout_blocks.group_words_into_lines') as mock_group:
+        with patch('itau_pdf.layout_blocks.group_words_into_lines') as mock_group:
             # Mock group_words_into_lines to just return what it's given as "Lines"
             mock_group.side_effect = lambda words: [Line(y0=w.y0, x0=w.x0, y1=w.y1, x1=w.x1, text=w.text) for w in words]
 
-            columns = _split_into_columns(page)
+            columns = _split_columns(page)
 
             self.assertEqual(len(columns[Column.left]), 2)
             self.assertEqual(len(columns[Column.right]), 1)
@@ -70,9 +70,9 @@ class TestItauBlocks(unittest.TestCase):
     def test_split_into_columns_empty(self):
         mock_page_obj = MagicMock()
         mock_page_obj.get_text.return_value = []
-        page = Page(index=0, object=mock_page_obj, x_split=200.0)
+        page = Page(index=0, pdf=mock_page_obj, x_split=200.0)
 
-        self.assertIsNone(_split_into_columns(page))
+        self.assertIsNone(_split_columns(page))
 
 
 if __name__ == "__main__":
