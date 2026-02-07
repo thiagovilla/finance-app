@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Iterable, Iterator, Literal
 
@@ -34,6 +35,11 @@ class Block:
     text: str
 
 
+def get_layout(issue_date: datetime) -> Layout:
+    """August 2025 onwards is modern."""
+    return Layout.modern if issue_date >= datetime(2025, 8, 1) else Layout.legacy
+
+
 # TODO: I think this should be control flow?
 def iter_pdf_blocks(pdf_path: str, layout: Layout = Layout.modern) -> Iterator[Block]:
     """Iterate through PDF pages, yielding text blocks in flipped N order from start to stop marker."""
@@ -60,7 +66,7 @@ def _iter_pages(doc: fitz.Document, layout: Layout) -> Iterator[Page]:
         layout, split_offsets_cm[Layout.modern]
     )
     base_split_x: float | None = None
-    for page_number, page in doc:
+    for page_number, page in enumerate(doc, start=1):
         words = page.get_text("words")
         x_split = _deprecated__calc_inter_word_x_split(words, page.rect)
         if base_split_x is None:

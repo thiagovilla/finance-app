@@ -24,37 +24,10 @@ MONTH_ABBREVIATIONS = [
     "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
 ]
 
-
-# --------------- 1. PDF PARSING ---------------
-
-# Goal: Open PDF, define layout, get metadata, check markers
-
-# 1. Open PDF and extract all text
-# 2. Find metadata (last 4 digits, total, payment date)
-# 3. Split content left/right columns
-# 4. Parse blocks in order (inverted N) between start and stop markers
-
-# --------------- 1.1 INVOICE METADATA ---------------
-
 def get_pdf_text(pdf_path: str) -> str:
     """Extracts all text from a PDF file."""
     with fitz.open(pdf_path) as pdf:
         return "\n".join(page.get_text() for page in pdf)
-
-
-## FROM NOW ON STATAMENTS
-
-
-# @dataclass(frozen=True)
-# class Statement:
-#     date: datetime
-#     amount: float
-#     description: str
-#
-#
-# def _parse_block(block: BlockInfo) -> List[Statement] | None:
-#     return None
-
 
 # --------------- FORMATTING & ID GENERATION (ADR 0004) ---------------
 
@@ -122,53 +95,6 @@ def _flip_sign_last_column(csv_data: Iterable[str]) -> list[str]:
     return new_data
 
 
-# --------------- STATEMENT EXTRACTION ---------------
-
-def _blocks_to_statements(blocks: Iterable[str], year: str, payment_date: str | None) -> list[str]:
-    statements: list[str] = []
-    index = 1
-    for block in blocks:
-        parsed, index = _parse_block_basic(block, year, payment_date, index)
-        statements.extend(parsed)
-    return statements
-
-
-def _parse_block_basic(block: str, year: str, payment_date: str | None, index: int) -> tuple[list[str], int]:
-    normalized_block = re.sub(r"(?m)^(\d{1,2})/(\d)\s+(\d)$", r"\1/\2\3", block)
-    lines = [line for line in normalized_block.splitlines() if line.strip()]
-    output_rows: list[str] = []
-    i = 0
-    while i < len(lines):
-        date_line = re.sub(r"\s+", "", lines[i])
-        if not re.match(r"^\d{1,2}/\d{1,2}$", date_line):
-            i += 1
-            continue
-        j, desc_lines, inst_line, amt_line = i + 1, [], None, None
-        while j < len(lines):
-            line = lines[j].strip()
-            amt = _normalize_amount_text(line)
-            if amt:
-                amt_line = amt
-                break
-            if re.match(r"^\d{1,2}/\d{1,2}$", re.sub(r"\s+", "", line)) and j + 1 < len(lines):
-                next_amt = _normalize_amount_text(lines[j + 1])
-                if next_amt:
-                    inst_line, amt_line = re.sub(r"\s+", "", line), next_amt
-                    j += 1
-                    break
-            desc_lines.append(line)
-            j += 1
-        if amt_line and desc_lines:
-            match = f"{date_line}\n{' '.join(desc_lines)}\n{inst_line or ''}\n{amt_line}".replace("\n\n", "\n")
-            d_part, desc, amt = _match_to_csv(match, year).split(",", 2)
-            row_id = _generate_itau_id(payment_date or d_part, index)
-            output_rows.append(f"{row_id},{d_part},{payment_date or ''},{desc},{amt},itau_cc")
-            index, i = index + 1, j + 1
-        else:
-            i += 1
-    return output_rows, index
-
-
 # --------------- METADATA EXTRACTION ---------------
 
 def _normalize_amount_text(amount: str) -> str | None:
@@ -178,6 +104,7 @@ def _normalize_amount_text(amount: str) -> str | None:
     return cleaned.replace(".", "").replace(",", ".")
 
 
+# this is definitely control flow, not lib
 def check_total(csv_data: Iterable[str], expected_total: float) -> None:
     try:
         total_sum = sum(float(row.split(",")[4]) for row in csv_data)

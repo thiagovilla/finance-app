@@ -15,26 +15,11 @@ import tty
 import typer
 
 from finance_cli.itau import (
-    _blocks_to_statements,
-    blocks_to_statements_with_layout,
-    _extract_blocks,
-    extract_blocks_with_layout,
-    _extract_total_from_pdf,
-    _extract_raw_text,
-    extract_emissao_year,
-    extract_payment_date,
-    extract_card_last4,
     _flip_sign_last_column,
     _localize_rows,
     check_total,
-    write_csv_lines,
     write_csv_lines_idempotent,
-    parse_brl_amount,
-    annotate_pdf_blocks,
     CSV_HEADERS,
-    CSV_HEADERS_ENHANCED,
-    Layout,
-    month_number_for_date,
 )
 from finance_cli.nu import parse_nubank_csv
 from finance_cli.ai import suggest_categories
@@ -68,6 +53,8 @@ from finance_cli.db import (
     upsert_categorization_full,
 )
 from finance_cli.notion_cli import notion_app
+from itau.layout_blocks import Layout
+from itau.utils import parse_brl_amount
 
 app = typer.Typer(help="Personal finance CLI.")
 
@@ -1157,69 +1144,6 @@ def parse_itau(
 
     pdf_paths = resolve_itau_inputs(input_paths[0])
 
-    if debug:
-        mode = debug_mode
-        outputs: list[str] = []
-        for pdf_path in pdf_paths:
-            if len(pdf_paths) > 1:
-                outputs.append(f"=== {pdf_path} ===")
-            if mode in {DebugMode.all, DebugMode.total}:
-                total_found = _extract_total_from_pdf(pdf_path)
-                if total_found is None:
-                    outputs.append("total_scanned=None")
-                else:
-                    outputs.append(f"total_scanned={total_found:.2f}")
-            if mode in {DebugMode.all, DebugMode.raw}:
-                outputs.append(_extract_raw_text(pdf_path))
-            if mode in {DebugMode.all, DebugMode.normalized}:
-                from finance_cli.itau import normalize_text
-                raw_text = _extract_raw_text(pdf_path)
-                outputs.append(normalize_text(raw_text))
-            if mode in {DebugMode.all, DebugMode.layout}:
-                resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
-                payment_date = extract_payment_date(pdf_path)
-                layout_for_pdf = resolve_layout(payment_date)
-                outputs.append(
-                    f"layout_resolved={layout_for_pdf.value}, payment_date={payment_date or ''}"
-                )
-                blocks = extract_blocks_with_layout(pdf_path, layout_for_pdf)
-                statements = blocks_to_statements_with_layout(
-                    blocks, resolved_year, payment_date, enhanced=enhanced
-                )
-                if enhanced:
-                    outputs.append(
-                        "page,column,index,x0,y0,transaction_date,payment_date,description,amount,category,location"
-                    )
-                else:
-                    outputs.append(
-                        "page,column,index,x0,y0,transaction_date,payment_date,description,amount"
-                    )
-                for index, page, column, x0, y0, row in statements:
-                    parts = row.split(",", 6)
-                    if len(parts) < 5:
-                        outputs.append(f"{page},{column},{index},{x0:.2f},{y0:.2f},{row}")
-                        continue
-                    if enhanced:
-                        outputs.append(
-                            f"{page},{column},{parts[0]},{x0:.2f},{y0:.2f},{parts[1]},{parts[2]},{parts[3]},{parts[4]},{parts[5] if len(parts) > 5 else ''},{parts[6] if len(parts) > 6 else ''}"
-                        )
-                    else:
-                        outputs.append(
-                            f"{page},{column},{parts[0]},{x0:.2f},{y0:.2f},{parts[1]},{parts[2]},{parts[3]},{parts[4]}"
-                        )
-            if mode in {DebugMode.all, DebugMode.annotate}:
-                payment_date = extract_payment_date(pdf_path)
-                layout_for_pdf = resolve_layout(payment_date)
-                annotated_path = pdf_path.with_name(f"{pdf_path.stem}_annotated.pdf")
-                annotate_pdf_blocks(pdf_path, annotated_path, layout_for_pdf)
-                outputs.append(f"annotated_pdf={annotated_path}")
-        debug_output = "\n".join(outputs)
-        if output is None:
-            print(debug_output)
-        else:
-            output.write_text(debug_output, encoding="utf-8")
-        return
-
     all_rows: list[str] = []
     total_mismatches: list[str] = []
     total_missing: list[str] = []
@@ -1282,7 +1206,7 @@ def parse_itau(
         return sorted(rows, key=sort_key, reverse=direction == "desc")
 
     for pdf_path in pdf_paths:
-        resolved_year = year or extract_emissao_year(pdf_path) or datetime.now().strftime("%y")
+        resolved_year = year or extract_issue_year(pdf_path) or datetime.now().strftime("%y")
         payment_date = extract_payment_date(pdf_path)
         layout_for_pdf = resolve_layout(payment_date)
         text_blocks = _extract_blocks(pdf_path, layout_for_pdf)
@@ -1367,6 +1291,22 @@ def parse_itau(
         typer.echo("Warning: totals not found in:", err=True)
         for path in total_missing:
             typer.echo(f"- {path}", err=True)
+
+
+def resolve_itau_inputs(input_path: str) -> list[Path]:
+    if any(char in input_path for char in ["*", "?", "["]):
+        matches = [Path(path) for path in glob.glob(input_path)]
+    else:
+        path = Path(input_path)
+        if path.is_dir():
+            matches = sorted(path.glob("*.pdf"))
+        else:
+            matches = [path]
+
+    pdfs = [path for path in matches if path.is_file() and path.suffix.lower() == ".pdf"]
+    if not pdfs:
+        raise typer.BadParameter(f"No PDF files found for input: {input_path}")
+    return pdfs
 
 
 if __name__ == "__main__":

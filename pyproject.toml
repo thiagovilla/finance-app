@@ -15,7 +15,8 @@ dependencies = [
 ]
 
 [project.scripts]
-finance = "finance_cli.cli:app"
+#finance = "finance_cli.cli:app"
+finance = "finance_cli.debug_cli:app"
 
 [project.optional-dependencies]
 dev = [
