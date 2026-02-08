@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime
 from typing import Iterator
 
 from itau_pdf.layout import Line
@@ -17,12 +17,13 @@ class Statement:
     location: str = ""
 
 
-def parse_lines(lines: Iterator[Line]) -> Iterator[Statement]:
+def parse_lines(lines: Iterator[Line], payment_date: date) -> Iterator[Statement]:
     """
     Parses lines into statements. Lines may not be consecutive.
     Line 1: DD/MM <description> <amount>
     Line 2: <category> . <location> (or just <category>)
     """
+    index = 1
     current_stmt: dict | None = None
     for line in lines:
         text = line.text.strip()
@@ -36,12 +37,14 @@ def parse_lines(lines: Iterator[Line]) -> Iterator[Statement]:
             if current_stmt:
                 yield Statement(**current_stmt)
             current_stmt = {
-                "date": first_line_match.group(1),
+                "id": f"{payment_date.strftime("%Y-%b")}-{index:03d}",
+                "date": _parse_date(first_line_match.group(1), payment_date),
                 "description": first_line_match.group(2).strip(),
-                "amount": parse_brl_amount(first_line_match.group(3)),
+                "amount": -parse_brl_amount(first_line_match.group(3)),
                 "category": "",
                 "location": "",
             }
+            index += 1
             continue
 
         # 2. Match Line 2: Category and Location
@@ -60,23 +63,9 @@ def parse_lines(lines: Iterator[Line]) -> Iterator[Statement]:
         yield Statement(**current_stmt)
 
 
-def flip_sign(statements: Iterator[Statement]) -> Iterator[Statement]:
-    """Flips the sign of the amount for each statement."""
-    for statement in statements:
-        yield replace(statement, amount=-statement.amount)
-
-
-def add_year(statements: Iterator[Statement], issue_date: date) -> Iterator[Statement]:
-    """Adds the given year to the date of each statement."""
-    for statement in statements:
-        if not isinstance(statement.date, str):
-            continue
-        parsed_date = parse_dm_date(statement.date)
-        year = issue_date.year - 1 if issue_date.month == 1 and parsed_date.month == 12 else issue_date.year
-        yield replace(statement, date=parsed_date.replace(year=year))
-
-
-def add_id(statements: Iterator[Statement], payment_date: date) -> Iterator[Statement]:
-    """Adds an ID to each statement in the format YYYY-MMM-<index>."""
-    for index, statement in enumerate(statements, start=1):
-        yield replace(statement, id=f"{payment_date.year}-{payment_date.strftime('%b')}-{index}")
+def _parse_date(dm_date_str: str, payment_date: date) -> date:
+    parsed_date = datetime.strptime(dm_date_str, "%d/%m").date()
+    year = payment_date.year
+    if payment_date.month == 1 and parsed_date.month == 12:
+        year -= 1
+    return parsed_date.replace(year)

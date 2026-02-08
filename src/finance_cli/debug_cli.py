@@ -9,7 +9,7 @@ from finance_cli.itau import get_pdf_text
 from itau_pdf.debug import annotate_pdf
 from itau_pdf.layout import iter_lines
 from itau_pdf import metadata
-from itau_pdf.statements import parse_lines
+from itau_pdf.statements import parse_lines, add_id, flip_sign, add_year
 from itau_pdf.utils import normalize_text
 
 app = typer.Typer(help="Debug entrypoint for personal finance CLI.")
@@ -43,27 +43,33 @@ def debug_itau_pdf(
         outputs.append("\n--- METADATA ---")
         card_last4 = metadata.extract_last4(raw_text)
         stmt_total = metadata.extract_total(raw_text)
-        pay_date = metadata.extract_payment_date(raw_text)
+        payment_date = metadata.extract_payment_date(raw_text)
         issue_date = metadata.extract_issue_date(raw_text)
         outputs.append(f"Card Last 4: {card_last4}")
         outputs.append(f"Total: {stmt_total}")
-        outputs.append(f"Payment Date: {pay_date}")
+        outputs.append(f"Payment Date: {payment_date}")
         outputs.append(f"Issue Date: {issue_date}")
 
-        # 4. Lines (using new layout logic)
-        outputs.append("\n--- LINES ---")
+
+
         with fitz.open(pdf_path) as doc:
+            # 4. Lines (using new layout logic)
+            outputs.append("\n--- LINES ---")
             for line in iter_lines(doc):
                 outputs.append(
                     # f"[P{line.page} {line.column.value}] ({line.x0:.1f}, {line.y0:.1f}): {line.text}"
                     f"({line.x0:.1f}, {line.y0:.1f}): {line.text}"
                 )
 
+            # 5. Statements
             outputs.append("\n--- STATEMENTS ---")
-            for statement in parse_lines(iter_lines(doc)):
+            for statement in add_year(add_id(flip_sign(parse_lines(iter_lines(doc))), payment_date), issue_date):
                 outputs.append(
-                    f"{statement.date} / {statement.description} / {statement.amount} / {statement.category} / {statement.location or "-"}"
+                    f"{statement.id} / {statement.date} / {statement.description} / {statement.amount} / {statement.category} / {statement.location or "-"}"
                 )
+
+
+
 
         annotate_pdf(str(pdf_path))
 

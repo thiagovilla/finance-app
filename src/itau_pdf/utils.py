@@ -29,12 +29,9 @@ def dmy_to_mdy(date_str: str) -> str:
     return parsed.strftime("%m/%d/%y")
 
 
-def parse_dm_date(date_str: str) -> date | None:
+def parse_dm_date(date_str: str) -> date:
     """Parse a date string in DD/MM format."""
-    try:
-        return datetime.strptime(date_str, "%d/%m").date()
-    except ValueError:
-        return None
+    return datetime.strptime(date_str, "%d/%m").date()
 
 # --------------- UTILS ---------------
 
