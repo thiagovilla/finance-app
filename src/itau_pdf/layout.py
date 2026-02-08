@@ -110,17 +110,15 @@ def _split_columns(page: Page) -> dict[Column, list[Line]] | None:
     right_words = [w for w in words if w.x0 >= page.x_split]
 
     return {
-        Column.left: _group_words(left_words),
-        Column.right: _group_words(right_words),
+        # TODO: Refactor, not happy with this
+        Column.left: _group_words(left_words, page.pdf.number + 1, Column.left),
+        Column.right: _group_words(right_words, page.pdf.number + 1, Column.right),
     }
 
 
-def _group_words(words: List[Word], y_tol: float | None = None) -> List[Line]:
+def _group_words(words: List[Word], page: int, column: Column) -> List[Line]:
     """Decide which words belong on the same line and order them left-to-right."""
-    if not words:
-        return []
-
-    y_tol = y_tol or _calc_y_tol(words)
+    y_tol = _calc_y_tol(words)
     words_sorted = sorted(words, key=lambda w: (w.y0, w.x0))
 
     # 1st pass - decide which words belong on the same line
@@ -153,8 +151,8 @@ def _group_words(words: List[Word], y_tol: float | None = None) -> List[Line]:
             x0=words_in_line[0].x0,
             x1=words_in_line[-1].x1,
             text=text,
-            column=Column.left,
-            page=1
+            column=column,
+            page=page
         ))
     return result
 

@@ -1,6 +1,30 @@
+import re
+from dataclasses import dataclass
+from typing import List
+
 import fitz
 
-from itau_pdf.layout import _iter_pages, _iter_lines, _has_marker
+from itau_pdf.layout import _iter_pages, _iter_lines, _has_marker, Line, Column
+
+
+@dataclass(frozen=True)
+class StatementLine:
+    page: int = 0
+    column: Column = Column.left
+    text: str = ""
+
+
+def filter_statement_lines(lines: List[Line]) -> List[StatementLine]:
+    statements = []
+    for line in lines:
+        if not re.match(r"^\d{2}/\d{2}", line.text):
+            continue
+        statements.append(StatementLine(
+            page=line.page,
+            column=line.column,
+            text=line.text,
+        ))
+    return statements
 
 
 def annotate_pdf(pdf_path: str, output_path: str | None = None) -> None:

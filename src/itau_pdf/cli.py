@@ -7,7 +7,7 @@ from pathlib import Path
 from itau_pdf import metadata
 from itau_pdf.layout import iter_lines
 from itau_pdf.statements import parse_lines
-from itau_pdf.debug import annotate_pdf
+from itau_pdf.debug import annotate_pdf, filter_statement_lines
 from finance_cli.utils import resolve_itau_inputs
 
 app = typer.Typer()
@@ -142,9 +142,13 @@ def debug_itau_pdf(
         outputs.append(f"Issue Date: {meta.issue_date}")
 
         # 3. Lines
-        outputs.append("\n--- LINES ---")
+        outputs.append("\n--- LINES (RAW) ---")
         for line in iter_lines(doc):
             outputs.append(f"({line.x0:.1f}, {line.y0:.1f}): {line.text}")
+
+        outputs.append("\n--- LINES (STATEMENTS) ---")
+        for line in filter_statement_lines(list(iter_lines(doc))):
+            outputs.append(f"{line.page} {line.column} {line.text}")
 
         # 4. Statements
         outputs.append("\n--- STATEMENTS ---")
