@@ -33,7 +33,7 @@ def parse_lines(lines: Iterator[Line], payment_date: date) -> Iterator[Statement
         # 1. Match Line 1: Date, Description, Amount
         # Handles: "23/01 AMAZON*MARKETPLACE 02/08 -170,00" or "15/02 IFOOD 42,50"
         # Regex: date (DD/MM), then anything (description), then BRL amount
-        # Issue: "(142.3, 285.1): 09/07 MERCADOPAGO *2PRODUTO -25,5 2" (Aug 2025 PG 2)
+        # Issue: "(142.3, 285.1): 09/07 MERCADOPAGO *2PRODUTO -25,5 2" (Aug 2025 PG 2) -> ",\s?[\d\s]{2,}" accounts for artifacts in decimal part
         if first_line_match := re.match(r"^(\d{2}/\d{2})\s+(.+?)\s+((?:-\s?)?[\d.]+,\s?[\d\s]{2,})$", text, re.IGNORECASE):
             if current_stmt:
                 yield Statement(**current_stmt)
