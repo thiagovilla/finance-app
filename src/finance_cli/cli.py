@@ -30,7 +30,6 @@ from finance_cli.db import (
     count_statements,
     count_uncategorized,
     fetch_uncategorized_canonicals,
-    get_notion_sync_state,
     find_statements_by_description,
     get_categorization,
     get_sample_statement_by_canonical,
@@ -41,19 +40,15 @@ from finance_cli.db import (
     list_categorizations,
     list_categorization_candidates,
     list_category_counts,
-    list_statements_with_categories,
     list_uncategorized_canonicals_with_counts,
     recanonicalize_categorizations,
     recanonicalize_statements,
     resolve_database,
-    upsert_statement,
     upsert_setting,
-    upsert_notion_sync_state,
     upsert_categorization,
     upsert_categorization_full,
 )
 from finance_cli.notion_cli import notion_app
-from itau_pdf.layout import Layout
 from itau_pdf.utils import parse_brl_amount
 
 app = typer.Typer(help="Personal finance CLI.")
@@ -1057,7 +1052,6 @@ def _ensure_no_itau_options(
         total: str | None,
         debug: bool,
         sort: str | None,
-        layout: Layout | None,
         merge: bool,
         no_headers: bool,
         enhanced: bool,
@@ -1119,18 +1113,6 @@ def parse_itau(
 ) -> None:
     """Parse Itaú credit card PDF(s) into CSV lines (id: YYYY-MMM-index)."""
 
-    def resolve_layout(payment_date: str | None) -> Layout:
-        if layout is not None:
-            return layout
-        if not payment_date:
-            return Layout.legacy
-        try:
-            due_date = datetime.strptime(payment_date, "%d/%m/%y")
-        except ValueError:
-            return Layout.legacy
-        return Layout.modern if due_date >= datetime(2025, 8, 1) else Layout.legacy
-
-    debug_mode = DebugMode.all
     if debug and input_paths:
         first = input_paths[0].lower()
         if first in {mode.value for mode in DebugMode}:

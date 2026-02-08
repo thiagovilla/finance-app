@@ -11,11 +11,6 @@ from itau_pdf.utils import normalize_text
 # Layout module goal: parse PDF, emit lines in flipped N order from start to stop marker
 
 
-class Layout(str, Enum):
-    legacy = "legacy"
-    modern = "modern"
-
-
 @dataclass(frozen=True)
 class Page:
     index: int
@@ -50,15 +45,10 @@ class Line:
     y1: float
 
 
-def get_layout(issue_date: datetime) -> Layout:
-    """August 2025 onwards is modern."""
-    return Layout.modern if issue_date >= datetime(2025, 8, 1) else Layout.legacy
-
-
-def iter_lines(doc: fitz.Document, layout: Layout = Layout.modern) -> Iterator[Line]:
+def iter_lines(doc: fitz.Document) -> Iterator[Line]:
     """Yield lines in flipped N order from start to stop marker."""
     start_marker = False
-    for page in _iter_pages(doc, layout):
+    for page in _iter_pages(doc):
         for line in _iter_lines(page):
             if not start_marker and _has_marker(line, "start"):
                 start_marker = True
@@ -82,54 +72,23 @@ def _has_marker(line: Line, marker: Literal["start", "stop"]) -> bool:
 
 # ---------- PAGES ----------
 
-def _iter_pages(doc: fitz.Document, layout: Layout) -> Iterator[Page]:
+def _iter_pages(doc: fitz.Document) -> Iterator[Page]:
     """Yield pages with an x-split coordinate based on the layout."""
     for page in doc:
-        x_split = _calc_x_plit(page, layout)
+        x_split = _calc_x_plit(page)
         yield Page(page.number + 1, page, x_split)
 
 
-def _calc_x_plit(page: fitz.Page, layout: Layout) -> float:
+def _calc_x_plit(page: fitz.Page) -> float:
     cm_to_pt = 28.35
-    split_offsets_cm = {
-        Layout.modern: (-1.0, 1.0),
-        Layout.legacy: (0.0, 1.5),
-    }
-    first_offset_cm, other_offset_cm = split_offsets_cm.get(layout)
     midpoint = _get_page_midpoint(page)
-    offset = first_offset_cm if page.number == 0 else other_offset_cm
+    offset = 0.0 if page.number == 0 else 1.7
     return midpoint + (offset * cm_to_pt)
 
 
 def _get_page_midpoint(page: fitz.Page) -> float:
     x0, _, width, _ = page.rect
     return x0 + (width / 2)
-
-
-def _deprecated__calc_inter_word_x_split(words: list[tuple], page_rect: fitz.Rect) -> float:
-    """DEPRECATED. Compute split point based on inter-word gaps."""
-    x0_values = sorted(word[0] for word in words)
-    if len(x0_values) < 2:
-        return page_rect.x0 + (page_rect.width / 2)
-    max_gap = 0.0
-    x_split = page_rect.x0 + (page_rect.width / 2)
-    prev = x0_values[0]
-    for current in x0_values[1:]:
-        gap = current - prev
-        if gap > max_gap:
-            max_gap = gap
-            x_split = (prev + current) / 2
-        prev = current
-    min_x0 = x0_values[0]
-    max_x0 = x0_values[-1]
-    span = max_x0 - min_x0
-    if span <= 0:
-        return page_rect.x0 + (page_rect.width / 2)
-    min_split = min_x0 + (span * 0.25)
-    max_split = max_x0 - (span * 0.25)
-    if max_gap >= 20.0 and min_split <= x_split <= max_split:
-        return x_split
-    return min_x0 + (span / 2)
 
 
 # ---------- LINES ----------

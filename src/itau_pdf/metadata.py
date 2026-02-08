@@ -9,26 +9,6 @@ def extract_last4(pdf_text: str) -> str | None:
     masked_match = re.findall(r"X{4}\.(\d{4})", pdf_text, flags=re.IGNORECASE)
     if masked_match:
         return masked_match[-1]
-
-    # TODO: Needed?
-    # patterns = (
-    #     r"(?:final|finais)\s*[:\-]?\s*(\d{4})",
-    #     r"(?:Cart[aã]o|Cartao)[^\d]{0,20}(\d{4})",
-    # )
-    # for pattern in patterns:
-    #     matches = re.findall(pattern, text, flags=re.IGNORECASE)
-    #     if matches:
-    #         return matches[-1]
-    #
-    # normalized_text = _normalize_text(text)
-    # matches = re.findall(
-    #     r"(?:cartaofinal|cartaofinais|final|finais)(\d{4})", normalized_text
-    # )
-    # if matches:
-    #     return matches[-1]
-    # matches = re.findall(r"cartao(\d{4})", normalized_text)
-    # if matches:
-    #     return matches[-1]
     return None
 
 
@@ -43,18 +23,6 @@ def extract_total(text: str) -> float | None:
         match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
         if match:
             return parse_brl_amount(match.group(1))
-
-    # TODO: Needed?
-    # normalized_text = _normalize_text(text)
-    # labels = ("ototaldasuafaturae", "totaldestafatura")
-    # for label in labels:
-    #     match = re.search(
-    #         rf"{label}.{{0,200}}?(?:r\$)?([\d.]+,\d{{2}})",
-    #         normalized_text,
-    #         flags=re.DOTALL,
-    #     )
-    #     if match:
-    #         return _parse_brl_amount(match.group(1))
     return None
 
 

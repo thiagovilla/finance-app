@@ -7,7 +7,7 @@ import typer
 from finance_cli.cli import resolve_itau_inputs
 from finance_cli.itau import get_pdf_text
 from itau_pdf.debug import annotate_pdf
-from itau_pdf.layout import get_layout, iter_lines, _iter_lines
+from itau_pdf.layout import iter_lines
 from itau_pdf import metadata
 from itau_pdf.statements import parse_statements
 from itau_pdf.utils import normalize_text
@@ -60,7 +60,7 @@ def debug_itau_pdf(
                 )
 
             outputs.append("\n--- STATEMENTS ---")
-            for statement in parse_statements(iter_lines(doc, get_layout(pay_date))):
+            for statement in parse_statements(iter_lines(doc)):
                 outputs.append(
                     f"{statement.date} / {statement.description} / {statement.amount} / {statement.category} / {statement.location or "-"}"
                 )

@@ -1,7 +1,7 @@
 import fitz
 
 from finance_cli.itau import get_pdf_text
-from itau_pdf.layout import _iter_pages, get_layout, _iter_lines, _has_marker
+from itau_pdf.layout import _iter_pages, _iter_lines, _has_marker
 from itau_pdf.metadata import extract_issue_date
 
 
@@ -10,9 +10,8 @@ def annotate_pdf(pdf_path: str, output_path: str | None = None) -> None:
     doc = fitz.open(pdf_path)
     text = get_pdf_text(pdf_path)
     issue_date = extract_issue_date(text)
-    layout = get_layout(issue_date)
     start_marker = False
-    for page in _iter_pages(doc, layout):
+    for page in _iter_pages(doc):
         page_rect = page.pdf.rect
         page.pdf.draw_line(
             fitz.Point(page.x_split, page_rect.y0),
