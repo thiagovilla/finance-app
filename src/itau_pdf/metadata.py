@@ -31,14 +31,9 @@ def _extract_last4(pdf_text: str) -> str | None:
 
 def _extract_total(text: str) -> float | None:
     """Find the statement total in raw or normalized PDF text."""
-    total_patterns = (
-        r"total\s+desta\s+fatura\s*\n\s*(?:r\$)?\s*([\d\.]+,\d{2})",
-        r"o\s+total\s+da\s+sua\s+fatura\s+é:\s*\n?\s*r\$\s*([\d\.]+,\d{2})",
-        r"total\s+da\s+fatura(?!\s+anterior)\s*\n?\s*(?:r\$)?\s*([\d\.]+,\d{2})",
-    )
-    for pattern in total_patterns:
-        if match := re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE):
-            return parse_brl_amount(match.group(1))
+    if match := re.search(r"totaldestafatura\n(?:r\$)?([\d.]+,\d{2})", text.replace(" ", ""),
+                          flags=re.IGNORECASE | re.MULTILINE):
+        return parse_brl_amount(match.group(1))
     return None
 
 
