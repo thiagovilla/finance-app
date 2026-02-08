@@ -1,6 +1,7 @@
 import unittest
+from datetime import date
 from itau_pdf.layout import Line
-from itau_pdf.statements import parse_lines, flip_sign, Statement
+from itau_pdf.statements import parse_lines, flip_sign, Statement, add_year
 
 
 class TestStatements(unittest.TestCase):
@@ -58,3 +59,36 @@ class TestStatements(unittest.TestCase):
         flipped = list(flip_sign(iter(statements)))
         self.assertEqual(flipped[0].amount, -100.0)
         self.assertEqual(flipped[1].amount, 50.0)
+
+    def test_add_year_basic(self):
+        """Tests that add_year converts date strings to datetime dates"""
+        issue_date = date(2024, 3, 15)
+        statements = [
+            Statement(date="10/01", amount=100.0),
+            Statement(date="15/02", amount=50.0),
+            Statement(date="20/03", amount=25.0),
+        ]
+        results = list(add_year(iter(statements), issue_date))
+
+        self.assertEqual(results[0].date, date(2024, 1, 10))
+        self.assertEqual(results[1].date, date(2024, 2, 15))
+        self.assertEqual(results[2].date, date(2024, 3, 20))
+
+    def test_add_year_december_january_transition(self):
+        """Tests that add_year handles year transition correctly"""
+        # Issue date in January should map December dates to previous year
+        issue_date = date(2024, 1, 15)
+        statements = [
+            Statement(date="20/12", amount=100.0),
+            Statement(date="25/12", amount=50.0),
+            Statement(date="05/01", amount=25.0),
+            Statement(date="10/01", amount=10.0),
+        ]
+        results = list(add_year(iter(statements), issue_date))
+
+        # December dates should be from previous year
+        self.assertEqual(results[0].date, date(2023, 12, 20))
+        self.assertEqual(results[1].date, date(2023, 12, 25))
+        # January dates should be from current year
+        self.assertEqual(results[2].date, date(2024, 1, 5))
+        self.assertEqual(results[3].date, date(2024, 1, 10))

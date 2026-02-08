@@ -1,5 +1,8 @@
 import unittest
-from itau_pdf.utils import normalize_text, parse_brl_amount, dmy_to_mdy
+from datetime import date
+
+from itau_pdf.utils import normalize_text, parse_brl_amount, dmy_to_mdy, parse_dm_date
+
 
 class TestUtils(unittest.TestCase):
 
@@ -30,6 +33,13 @@ class TestUtils(unittest.TestCase):
         # Invalid format should return original string
         self.assertEqual(dmy_to_mdy("2025-02-15"), "2025-02-15")
         self.assertEqual(dmy_to_mdy("not-a-date"), "not-a-date")
+
+    def test_parse_dm_date(self):
+        self.assertEqual(parse_dm_date("15/02"), date(1900, 2, 15))
+        # Invalid formats
+        self.assertEqual(parse_dm_date(""), None)
+        self.assertEqual(parse_dm_date("15/02/2024"), None)
+        self.assertEqual(parse_dm_date("not-a-date"), None)
 
 if __name__ == "__main__":
     unittest.main()

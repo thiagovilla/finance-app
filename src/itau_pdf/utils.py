@@ -1,6 +1,6 @@
 import re
 import unicodedata
-from datetime import datetime
+from datetime import datetime, date
 
 
 def normalize_text(text: str) -> str:
@@ -28,6 +28,13 @@ def dmy_to_mdy(date_str: str) -> str:
         return date_str
     return parsed.strftime("%m/%d/%y")
 
+
+def parse_dm_date(date_str: str) -> date | None:
+    """Parse a date string in DD/MM format."""
+    try:
+        return datetime.strptime(date_str, "%d/%m").date()
+    except ValueError:
+        return None
 
 # --------------- UTILS ---------------
 
