@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import date
 from typing import Iterator
 
 from itau_pdf.layout import Line
@@ -9,6 +9,7 @@ from itau_pdf.utils import parse_brl_amount, parse_dm_date
 
 @dataclass(frozen=True)
 class Statement:
+    id: str = ""
     date: "str | date" = ""  # Kept as DD/MM string
     description: str = ""
     amount: float = 0.0
@@ -73,3 +74,9 @@ def add_year(statements: Iterator[Statement], issue_date: date) -> Iterator[Stat
         parsed_date = parse_dm_date(statement.date)
         year = issue_date.year - 1 if issue_date.month == 1 and parsed_date.month == 12 else issue_date.year
         yield replace(statement, date=parsed_date.replace(year=year))
+
+
+def add_id(statements: Iterator[Statement], payment_date: date) -> Iterator[Statement]:
+    """Adds an ID to each statement in the format YYYY-MMM-<index>."""
+    for index, statement in enumerate(statements, start=1):
+        yield replace(statement, id=f"{payment_date.year}-{payment_date.strftime('%b')}-{index}")

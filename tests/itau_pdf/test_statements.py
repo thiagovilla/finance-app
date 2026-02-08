@@ -1,7 +1,7 @@
 import unittest
 from datetime import date
 from itau_pdf.layout import Line
-from itau_pdf.statements import parse_lines, flip_sign, Statement, add_year
+from itau_pdf.statements import parse_lines, flip_sign, Statement, add_year, add_id
 
 
 class TestStatements(unittest.TestCase):
@@ -92,3 +92,17 @@ class TestStatements(unittest.TestCase):
         # January dates should be from current year
         self.assertEqual(results[2].date, date(2024, 1, 5))
         self.assertEqual(results[3].date, date(2024, 1, 10))
+
+    def test_add_id(self):
+        """Tests that add_id generates IDs in YYYY-MMM-<index> format"""
+        payment_date = date(2024, 3, 15)
+        statements = [
+            Statement(amount=100.0),
+            Statement(amount=50.0),
+            Statement(amount=25.0),
+        ]
+        results = list(add_id(iter(statements), payment_date))
+
+        self.assertEqual(results[0].id, "2024-Mar-1")
+        self.assertEqual(results[1].id, "2024-Mar-2")
+        self.assertEqual(results[2].id, "2024-Mar-3")
