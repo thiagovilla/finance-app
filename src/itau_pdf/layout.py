@@ -70,34 +70,44 @@ def iter_lines(doc: fitz.Document, layout: Layout = Layout.modern) -> Iterator[L
             yield line
 
 
+def _has_marker(line: Line, marker: Literal["start", "stop"]) -> bool:
+    """Check if a line contains a marker."""
+    normalized_text = normalize_text(line.text)
+    if marker == "start":
+        return "lancamentos:comprasesaques" in normalized_text
+    elif marker == "stop":
+        return "comprasparceladas" in normalized_text
+    return False
+
+
+# ---------- PAGES ----------
+
 def _iter_pages(doc: fitz.Document, layout: Layout) -> Iterator[Page]:
-    """Yield pages with a split X coordinate based on the layout."""
+    """Yield pages with an x-split coordinate based on the layout."""
+    for page in doc:
+        x_split = _calc_x_plit(page, layout)
+        yield Page(page.number + 1, page, x_split)
+
+
+def _calc_x_plit(page: fitz.Page, layout: Layout) -> float:
     cm_to_pt = 28.35
     split_offsets_cm = {
         Layout.modern: (-1.0, 1.0),
         Layout.legacy: (0.0, 1.5),
     }
-    first_offset_cm, other_offset_cm = split_offsets_cm.get(
-        layout, split_offsets_cm[Layout.modern]
-    )
-    base_split_x: float | None = None
-    for page_number, page in enumerate(doc, start=1):
-        words = page.get_text("words")
-        x_split = _deprecated__calc_inter_word_x_split(words, page.rect)
-        if base_split_x is None:
-            base_split_x = x_split
-        offset_cm = first_offset_cm if page_number == 1 else other_offset_cm
-        split_x_line = base_split_x + (offset_cm * cm_to_pt)
-        yield Page(page_number, page, split_x_line)
+    first_offset_cm, other_offset_cm = split_offsets_cm.get(layout)
+    midpoint = _get_page_midpoint(page)
+    offset = first_offset_cm if page.number == 0 else other_offset_cm
+    return midpoint + (offset * cm_to_pt)
 
 
 def _get_page_midpoint(page: fitz.Page) -> float:
-    x0, width = page.rect
+    x0, _, width, _ = page.rect
     return x0 + (width / 2)
 
 
 def _deprecated__calc_inter_word_x_split(words: list[tuple], page_rect: fitz.Rect) -> float:
-    """Computes split point based on inter-word gaps"""
+    """DEPRECATED. Compute split point based on inter-word gaps."""
     x0_values = sorted(word[0] for word in words)
     if len(x0_values) < 2:
         return page_rect.x0 + (page_rect.width / 2)
@@ -122,6 +132,8 @@ def _deprecated__calc_inter_word_x_split(words: list[tuple], page_rect: fitz.Rec
     return min_x0 + (span / 2)
 
 
+# ---------- LINES ----------
+
 def _iter_lines(page: Page) -> Iterator[Line] | None:
     """Yield lines in flipped N order (left then right column, top to bottom)."""
     if not (columns := _split_columns(page)):
@@ -143,16 +155,6 @@ def _split_columns(page: Page) -> dict[Column, list[Line]] | None:
         Column.left: _group_words(left_words),
         Column.right: _group_words(right_words),
     }
-
-
-def _has_marker(line: Line, marker: Literal["start", "stop"]) -> bool:
-    """Check if a line contains a marker."""
-    normalized_text = normalize_text(line.text)
-    if marker == "start":
-        return "lancamentos:comprasesaques" in normalized_text
-    elif marker == "stop":
-        return "comprasparceladas" in normalized_text
-    return False
 
 
 def _group_words(words: List[Word], y_tol: float | None = None) -> List[Line]:
