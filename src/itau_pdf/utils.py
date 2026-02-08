@@ -14,7 +14,7 @@ def normalize_text(text: str) -> str:
 
 def parse_brl_amount(value: str) -> float:
     """Parse a BRL-formatted amount (1.234,56) into a float."""
-    cleaned = value.strip().replace(".", "").replace(",", ".")
+    cleaned = value.replace(" ", "").replace(".", "").replace(",", ".")
     return float(cleaned)
 
 

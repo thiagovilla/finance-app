@@ -34,14 +34,14 @@ class Word:
 @dataclass(frozen=True)
 class Line:
     """A line of text enriched with layout metadata."""
-    text: str
-    page: int
-    column: Column
+    text: str = ""
+    page: int = 0
+    column: Column = Column.left
     # Geometry kept for debugging/annotation
-    y0: float
-    x0: float
-    x1: float
-    y1: float
+    y0: float = 0.0
+    x0: float = 0.0
+    x1: float = 0.0
+    y1: float = 0.0
 
 
 def iter_lines(doc: fitz.Document) -> Iterator[Line]:
