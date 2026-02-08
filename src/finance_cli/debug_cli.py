@@ -1,13 +1,15 @@
 from __future__ import annotations
 from pathlib import Path
+
+import fitz
 import typer
 
 from finance_cli.cli import resolve_itau_inputs
 from finance_cli.itau import get_pdf_text
 from itau_pdf.debug import annotate_pdf
-from itau_pdf.layout import iter_pdf, get_layout
+from itau_pdf.layout import get_layout, iter_lines, _iter_lines
 from itau_pdf import metadata
-from itau_pdf.statements import _parse_lines
+from itau_pdf.statements import parse_statements
 from itau_pdf.utils import normalize_text
 
 app = typer.Typer(help="Debug entrypoint for personal finance CLI.")
@@ -50,17 +52,18 @@ def debug_itau_pdf(
 
         # 4. Lines (using new layout logic)
         outputs.append("\n--- LINES ---")
-        for line in iter_pdf(str(pdf_path), get_layout(pay_date)):
-            outputs.append(
-                # f"[P{line.page} {line.column.value}] ({line.x0:.1f}, {line.y0:.1f}): {line.text}"
-                f"({line.x0:.1f}, {line.y0:.1f}): {line.text}"
-            )
+        with fitz.open(pdf_path) as doc:
+            for line in iter_lines(doc):
+                outputs.append(
+                    # f"[P{line.page} {line.column.value}] ({line.x0:.1f}, {line.y0:.1f}): {line.text}"
+                    f"({line.x0:.1f}, {line.y0:.1f}): {line.text}"
+                )
 
-        outputs.append("\n--- STATEMENTS ---")
-        for index, statement in enumerate(_parse_lines(iter_pdf(str(pdf_path), get_layout(pay_date))), start=1):
-            outputs.append(
-                f"{index} ({statement.date:%d/%m/%Y}) / {statement.description} / R$ {statement.amount:.2f} / {statement.category} / {statement.location or "-"}"
-            )
+            outputs.append("\n--- STATEMENTS ---")
+            for statement in parse_statements(iter_lines(doc, get_layout(pay_date))):
+                outputs.append(
+                    f"{statement.date} / {statement.description} / {statement.amount} / {statement.category} / {statement.location or "-"}"
+                )
 
         annotate_pdf(str(pdf_path))
 

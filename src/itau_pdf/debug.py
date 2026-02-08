@@ -1,7 +1,7 @@
 import fitz
 
 from finance_cli.itau import get_pdf_text
-from itau_pdf.layout import _iter_pages, get_layout, _iter_lines, _check_marker
+from itau_pdf.layout import _iter_pages, get_layout, _iter_lines, _has_marker
 from itau_pdf.metadata import extract_issue_date
 
 
@@ -29,13 +29,13 @@ def annotate_pdf(pdf_path: str, output_path: str | None = None) -> None:
         )
 
 
-        for index, line in enumerate(_iter_lines(page), start=1):
-            if not start_marker and _check_marker(line, "start"):
+        for line in _iter_lines(page):
+            if not start_marker and _has_marker(line, "start"):
                 start_marker = True
                 continue
             if not start_marker:
                 continue
-            if _check_marker(line, "stop"):
+            if _has_marker(line, "stop"):
                 break
             if line.text.startswith("x_split="):
                 continue
@@ -43,7 +43,7 @@ def annotate_pdf(pdf_path: str, output_path: str | None = None) -> None:
             color = (1, 0, 0) if line.x0 >= page.x_split else (0, 0, 1)
             rect = fitz.Rect(line.x0, line.y0, line.x1, line.y1)
             page.pdf.draw_rect(rect, color=color, width=0.5)
-            label = f"{index} {line.x0:.2f},{line.y0:.2f}"
+            label = f"{line.x0:.2f},{line.y0:.2f}"
             page.pdf.insert_text(
                 fitz.Point(line.x0, max(line.y0 - 4, page_rect.y0 + 6)),
                 label,

@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
-from itau_pdf.layout import Page, Column, Block, _check_marker, _split_columns, _iter_lines
+from itau_pdf.layout import Page, Column, Block, _has_marker, _split_columns, _iter_lines
 from itau_pdf.layout_lines import Line
 
 
@@ -8,16 +8,16 @@ class TestItauBlocks(unittest.TestCase):
     def test_check_marker(self):
         # Test start marker
         start_block = Block(page=1, column=Column.left, x0=10, y0=10, text="Lançamentos: Compras e Saques")
-        self.assertTrue(_check_marker(start_block, "start"))
+        self.assertTrue(_has_marker(start_block, "start"))
 
         # Test stop marker
         stop_block = Block(page=1, column=Column.right, x0=10, y0=10, text="Compras Parceladas")
-        self.assertTrue(_check_marker(stop_block, "stop"))
+        self.assertTrue(_has_marker(stop_block, "stop"))
 
         # Test non-marker
         normal_block = Block(page=1, column=Column.left, x0=10, y0=10, text="Padaria do Zé")
-        self.assertFalse(_check_marker(normal_block, "start"))
-        self.assertFalse(_check_marker(normal_block, "stop"))
+        self.assertFalse(_has_marker(normal_block, "start"))
+        self.assertFalse(_has_marker(normal_block, "stop"))
 
     def test_iter_blocks(self):
         # Mocking Page and its columns

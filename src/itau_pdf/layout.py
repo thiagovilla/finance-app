@@ -1,11 +1,14 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Iterable, Iterator, Literal, List
+from typing import Iterator, Literal, List
 
 import fitz
 
 from itau_pdf.utils import normalize_text
+
+
+# Layout module goal: parse PDF, emit lines in flipped N order from start to stop marker
 
 
 class Layout(str, Enum):
@@ -36,11 +39,15 @@ class Word:
 
 @dataclass(frozen=True)
 class Line:
+    """A line of text enriched with layout metadata."""
+    text: str
+    page: int
+    column: Column
+    # Geometry kept for debugging/annotation
     y0: float
     x0: float
     x1: float
     y1: float
-    text: str
 
 
 def get_layout(issue_date: datetime) -> Layout:
@@ -48,21 +55,19 @@ def get_layout(issue_date: datetime) -> Layout:
     return Layout.modern if issue_date >= datetime(2025, 8, 1) else Layout.legacy
 
 
-# TODO: I think this should be control flow?
-def iter_pdf(pdf_path: str, layout: Layout = Layout.modern) -> Iterator[Line]:
-    """Iterate through PDF pages, yielding text blocks in flipped N order from start to stop marker."""
+def iter_lines(doc: fitz.Document, layout: Layout = Layout.modern) -> Iterator[Line]:
+    """Yield lines in flipped N order from start to stop marker."""
     start_marker = False
-    with fitz.open(pdf_path) as pdf:
-        for page in _iter_pages(pdf, layout):
-            for line in _iter_lines(page):
-                if not start_marker and _check_marker(line, "start"):
-                    start_marker = True
-                    continue
-                if not start_marker:
-                    continue
-                if _check_marker(line, "stop"):
-                    return
-                yield line
+    for page in _iter_pages(doc, layout):
+        for line in _iter_lines(page):
+            if not start_marker and _has_marker(line, "start"):
+                start_marker = True
+                continue
+            if not start_marker:
+                continue
+            if _has_marker(line, "stop"):
+                return
+            yield line
 
 
 def _iter_pages(doc: fitz.Document, layout: Layout) -> Iterator[Page]:
@@ -84,6 +89,11 @@ def _iter_pages(doc: fitz.Document, layout: Layout) -> Iterator[Page]:
         offset_cm = first_offset_cm if page_number == 1 else other_offset_cm
         split_x_line = base_split_x + (offset_cm * cm_to_pt)
         yield Page(page_number, page, split_x_line)
+
+
+def _get_page_midpoint(page: fitz.Page) -> float:
+    x0, width = page.rect
+    return x0 + (width / 2)
 
 
 def _deprecated__calc_inter_word_x_split(words: list[tuple], page_rect: fitz.Rect) -> float:
@@ -122,7 +132,7 @@ def _iter_lines(page: Page) -> Iterator[Line] | None:
 
 
 def _split_columns(page: Page) -> dict[Column, list[Line]] | None:
-    """Group words into lines based on whether they fall left or right of the x_split."""
+    """Group words into left/right columns based on x_split."""
     if not (words := [Word(*w[:5]) for w in page.pdf.get_text("words")]):
         return None
 
@@ -135,7 +145,7 @@ def _split_columns(page: Page) -> dict[Column, list[Line]] | None:
     }
 
 
-def _check_marker(line: Line, marker: Literal["start", "stop"]) -> bool:
+def _has_marker(line: Line, marker: Literal["start", "stop"]) -> bool:
     """Check if a line contains a marker."""
     normalized_text = normalize_text(line.text)
     if marker == "start":
@@ -182,7 +192,9 @@ def _group_words(words: List[Word], y_tol: float | None = None) -> List[Line]:
             y1=line_data["y1"],
             x0=words_in_line[0].x0,
             x1=words_in_line[-1].x1,
-            text=text
+            text=text,
+            column=Column.left,
+            page=1
         ))
     return result
 
@@ -193,18 +205,3 @@ def _calc_y_tol(words: List[Word]) -> float:
     median_height = heights[len(heights) // 2]
     # Tolerance is 30% of median height, at least 2.0 pts
     return max(2.0, median_height * 0.3)
-
-
-def foo_valid_line_iterator(doc: fitz.Document) -> Iterator[tuple[Page, Line]]:
-    """Filter lines that are valid for processing."""
-    start_marker = False
-    for page in enumerate(doc, start=1):
-        for line in _iter_lines(page):
-            if not start_marker and _check_marker(line, "start"):
-                start_marker = True
-                continue
-            if not start_marker:
-                continue
-            if _check_marker(line, "stop"):
-                return
-            yield page, line

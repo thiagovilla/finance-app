@@ -1,6 +1,5 @@
 import re
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Iterator
 
 from itau_pdf.layout import Line
@@ -9,45 +8,58 @@ from itau_pdf.utils import parse_brl_amount
 
 @dataclass(frozen=True)
 class Statement:
-    date: datetime
-    amount: float
+    date: str # Kept as DD/MM string
+    amount: float # Kept as BRL
     description: str
     category: str
     location: str
 
 
-# assume only valid lines
-def _parse_lines(lines: Iterator[Line]) -> Iterator[Statement]:
-    """Match "23/01 AMAZON MARKETPLACE 170,00" or "DIVERSOS .CURITIBA\""""
-    index = 1
-    statement = {
-        "date": datetime.now(),
-        "description": "",
-        "amount": 0.0,
-        "category": "",
-        "location": "",
-    }
+def parse_statements(lines: Iterator[Line]) -> Iterator[Statement]:
+    """
+    Parses lines into statements. Lines may not be consecutive.
+    Line 1: DD/MM <description> <amount>
+    Line 2: <category> . <location> (or just <category>)
+    """
+    current_stmt: dict | None = None
     for line in lines:
         text = line.text.strip()
-        print(f"DEBUG: Will match on line: {repr(text)}")
 
-        if matches := re.match(r"^(\d{2}/\d{2})\s*(.+?)\s*(-?[\d.]+,\d{2})$", text):
-            print(f"DEBUG: Matched line: {repr(matches)}")
-            statement["date"] = datetime.strptime(matches.group(1), "%d/%m")
-            statement["description"] = matches.group(2).strip()
-            statement["amount"] = parse_brl_amount(matches.group(3))
-            yield Statement(**statement)
+        # 1. Match Line 1: Date, Description, Amount
+        # Handles: "23/01 AMAZON*MARKETPLACE 02/08 -170,00" or "15/02 IFOOD 42,50"
+        # Regex: date (DD/MM), then anything (description), then BRL amount
+        if first_line_match := re.match(r"^(\d{2}/\d{2})\s+(.+?)\s+((?:-\s)?[\d.]+,\d{2})$", text, re.IGNORECASE):
+            # Yield pending statement that never got a Line 2
+            if current_stmt:
+                yield Statement(**current_stmt)
 
-        # 2. Match Category/Location format: "DIVERSOS .CURITIBA"
-        # If there's only one, there's no way to know which is which; assume category
-        # if matches := re.match(r"^(\w+)\s*\.\s*(\w*)$", line.text):
-        #     print(f"DEBUG: Matched line: {repr(matches)}")
-        #     statement["category"] = matches.group(1)
-        #     statement["location"] = matches.group(2)
-        #     temp_statement = statement.copy()
-        #     statement.clear()
-        #     yield Statement(**temp_statement)
+            current_stmt = {
+                "date": first_line_match.group(1),
+                "description": first_line_match.group(2).strip(),
+                "amount": first_line_match.group(3),
+                "category": "",
+                "location": "",
+            }
+            continue
 
+        # 2. Match Line 2: Category and Location
+        # Handles: "DIVERSOS . CURITIBA" or "SAUDE"
+        if current_stmt and text:
+            # Check for "Category . Location" pattern
+            if "." in text:
+                parts = text.split(".", 1)
+                current_stmt["category"] = parts[0].strip()
+                current_stmt["location"] = parts[1].strip()
+            else:
+                # One word only: assume it's category
+                current_stmt["category"] = text
+
+            yield Statement(**current_stmt)
+            current_stmt = None
+
+    # Yield any final pending statement
+    if current_stmt:
+        yield Statement(**current_stmt)
 
 # --------------- STATEMENT EXTRACTION ---------------
 
