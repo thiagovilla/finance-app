@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 from datetime import datetime
 
 from finance_cli.itau import get_pdf_text
-from itau_pdf.metadata import extract_last4, extract_total, extract_payment_date, extract_issue_date
+from itau_pdf.metadata import _extract_last4, _extract_total, _extract_payment_date, _extract_issue_date
 
 
 class TestItauMetadata(unittest.TestCase):
@@ -27,49 +27,49 @@ class TestItauMetadata(unittest.TestCase):
 
     def test_extract_last4(self):
         # Test modern layout pattern
-        self.assertEqual(extract_last4("Cartão final XXXX.7180"), "7180")
-        self.assertEqual(extract_last4("No do cartão: xxxx.1234"), "1234")
+        self.assertEqual(_extract_last4("Cartão final XXXX.7180"), "7180")
+        self.assertEqual(_extract_last4("No do cartão: xxxx.1234"), "1234")
 
         # Test no match
-        self.assertIsNone(extract_last4("No card number here"))
+        self.assertIsNone(_extract_last4("No card number here"))
 
     def test_extract_total(self):
         # Test various patterns found in Itaú PDFs
-        self.assertEqual(extract_total("Total desta fatura\n R$ 1.234,56"), 1234.56)
-        self.assertEqual(extract_total("O total da sua fatura é:\nR$ 500,00"), 500.0)
-        self.assertEqual(extract_total("Total da fatura\n 89,90"), 89.9)
+        self.assertEqual(_extract_total("Total desta fatura\n R$ 1.234,56"), 1234.56)
+        self.assertEqual(_extract_total("O total da sua fatura é:\nR$ 500,00"), 500.0)
+        self.assertEqual(_extract_total("Total da fatura\n 89,90"), 89.9)
 
         # Test negative/ignoring anterior
         text_with_anterior = "Total da fatura anterior R$ 100,00\nTotal da fatura\n R$ 250,00"
-        self.assertEqual(extract_total(text_with_anterior), 250.0)
+        self.assertEqual(_extract_total(text_with_anterior), 250.0)
 
-        self.assertIsNone(extract_total("No total mentioned"))
+        self.assertIsNone(_extract_total("No total mentioned"))
 
     def test_extract_payment_date(self):
         # Test standard match
         text = "Vencimento 20/10/2025"
-        self.assertEqual(extract_payment_date(text), datetime(2025, 10, 20))
+        self.assertEqual(_extract_payment_date(text), datetime(2025, 10, 20))
 
         # Test match with extra characters (the \D{0,20} part)
         text_extra = "Vencimento:  -------  15/02/2026"
-        self.assertEqual(extract_payment_date(text_extra), datetime(2026, 2, 15))
+        self.assertEqual(_extract_payment_date(text_extra), datetime(2026, 2, 15))
 
         # Test fallback to normalized text search
         text_norm = "DATA DE VENCIMENTO\n05/12/2025"
-        self.assertEqual(extract_payment_date(text_norm), datetime(2025, 12, 5))
+        self.assertEqual(_extract_payment_date(text_norm), datetime(2025, 12, 5))
 
         # Test invalid date/no match
-        self.assertIsNone(extract_payment_date("Vencimento 99/99/9999"))
-        self.assertIsNone(extract_payment_date("No date here"))
+        self.assertIsNone(_extract_payment_date("Vencimento 99/99/9999"))
+        self.assertIsNone(_extract_payment_date("No date here"))
 
     def test_extract_issue_date(self):
         # Test standard match
         text = "Emissão 15/09/2025"
-        self.assertEqual(extract_issue_date(text), datetime(2025, 9, 15))
+        self.assertEqual(_extract_issue_date(text), datetime(2025, 9, 15))
 
         # Test invalid date/no match
-        self.assertIsNone(extract_issue_date("Emissão 99/99/9999"))
-        self.assertIsNone(extract_issue_date("No date here"))
+        self.assertIsNone(_extract_issue_date("Emissão 99/99/9999"))
+        self.assertIsNone(_extract_issue_date("No date here"))
 
 
 if __name__ == "__main__":

@@ -41,10 +41,10 @@ def debug_itau_pdf(
 
         # 3. Metadata
         outputs.append("\n--- METADATA ---")
-        card_last4 = metadata.extract_last4(raw_text)
-        stmt_total = metadata.extract_total(raw_text)
-        payment_date = metadata.extract_payment_date(raw_text)
-        issue_date = metadata.extract_issue_date(raw_text)
+        card_last4 = metadata._extract_last4(raw_text)
+        stmt_total = metadata._extract_total(raw_text)
+        payment_date = metadata._extract_payment_date(raw_text)
+        issue_date = metadata._extract_issue_date(raw_text)
         outputs.append(f"Card Last 4: {card_last4}")
         outputs.append(f"Total: {stmt_total}")
         outputs.append(f"Payment Date: {payment_date}")

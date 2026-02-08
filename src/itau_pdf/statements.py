@@ -1,10 +1,10 @@
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Iterator
 
 from itau_pdf.layout import Line
-from itau_pdf.utils import parse_brl_amount, parse_dm_date
+from itau_pdf.utils import parse_brl_amount
 
 
 @dataclass(frozen=True)

@@ -14,15 +14,9 @@ import tty
 
 import typer
 
-from finance_cli.itau import (
-    _flip_sign_last_column,
-    _localize_rows,
-    check_total,
-    write_csv_lines_idempotent,
-    CSV_HEADERS,
-)
-from finance_cli.nu import parse_nubank_csv
 from finance_cli.ai import suggest_categories
+from itau_pdf.cli import app as itau_pdf
+from finance_cli.nu import parse_nubank_csv
 from finance_cli.db import (
     ImportResult,
     apply_categorization_to_statements,
@@ -49,9 +43,9 @@ from finance_cli.db import (
     upsert_categorization_full,
 )
 from finance_cli.notion_cli import notion_app
-from itau_pdf.utils import parse_brl_amount
 
 app = typer.Typer(help="Personal finance CLI.")
+app.add_typer(itau_pdf, name="itau_pdf", help="Itaú PDF specific commands.")
 
 
 def _load_dotenv() -> None:
@@ -96,78 +90,12 @@ def parse(
             help="Parsing template (defaults to auto-detect).",
         ),
         output: Path | None = typer.Option(
-            None, "--output", "-o", help="Write output CSV (default depends on template)."
-        ),
-        year: str | None = typer.Option(
-            None, "--year", "-y", help="Year in YY format (Itaú only)."
-        ),
-        total: str | None = typer.Option(
-            None,
-            "--total",
-            help="Manual checksum total (Itaú only, e.g. 1234.56 or 1.234,56).",
-        ),
-        debug: bool = typer.Option(
-            False,
-            "--debug",
-            "-d",
-            help="Debug output (raw, total, normalized, layout, annotate, or all) and exit.",
-        ),
-        sort: str | None = typer.Option(
-            None,
-            "--sort",
-            "-s",
-            help="Sort output (format: '<column> <ASC|DESC>') (Itaú only).",
-        ),
-        layout: Layout | None = typer.Option(
-            None,
-            "--layout",
-            "-l",
-            help="PDF layout (Itaú only).",
-        ),
-        merge: bool = typer.Option(
-            False, "--merge", "-m", help="Merge multiple PDFs into one CSV (Itaú only)."
-        ),
-        no_headers: bool = typer.Option(
-            False, "--no-headers", "-n", help="Do not print CSV headers (Itaú only)."
-        ),
-        enhanced: bool = typer.Option(
-            False,
-            "--enhanced",
-            "-e",
-            help="Capture category/location when available (Itaú only).",
-        ),
-        rename: bool = typer.Option(
-            False, "--rename", "-r", help="Rename the PDF after parsing (Itaú only)."
+            None, "--output", "-o", help="Write output CSV."
         ),
 ) -> None:
+    """Parse Nubank statements. For Itaú, use 'finance itau parse'."""
     resolved_template = template or _detect_template(input_path)
-    if resolved_template == Template.itau_cc:
-        parse_itau(
-            input_paths=[input_path],
-            year=year,
-            total=total,
-            debug=debug,
-            sort=sort,
-            layout=layout,
-            merge=merge,
-            no_headers=no_headers,
-            enhanced=enhanced,
-            output=output,
-            rename=rename,
-        )
-        return
 
-    _ensure_no_itau_options(
-        year=year,
-        total=total,
-        debug=debug,
-        sort=sort,
-        layout=layout,
-        merge=merge,
-        no_headers=no_headers,
-        enhanced=enhanced,
-        rename=rename,
-    )
     input_file = Path(input_path)
     if not input_file.exists() or input_file.is_dir():
         raise typer.BadParameter("CSV input must be a file.")
@@ -193,12 +121,6 @@ def import_statements(
             help="SQLite database path (defaults to Notion).",
         ),
         currency: str = typer.Option("BRL", "--currency", "-c", help="Currency code."),
-        account: str | None = typer.Option(
-            None,
-            "--account",
-            "-a",
-            help="Account name for Notion imports (defaults from source or filename).",
-        ),
 ) -> None:
     """Import a standard-format CSV into Notion or the configured database."""
     resolved_source = source or _detect_source_from_csv(csv_path)
@@ -1066,8 +988,6 @@ def _ensure_no_itau_options(
         invalid.append("--debug")
     if sort:
         invalid.append("--sort")
-    if layout:
-        invalid.append("--layout")
     if merge:
         invalid.append("--merge")
     if no_headers:
@@ -1080,199 +1000,6 @@ def _ensure_no_itau_options(
         raise typer.BadParameter(
             f"Options only valid for Itaú parsing: {', '.join(invalid)}"
         )
-
-
-def resolve_itau_inputs(input_path: str) -> list[Path]:
-    if any(char in input_path for char in ["*", "?", "["]):
-        matches = [Path(path) for path in glob.glob(input_path)]
-    else:
-        path = Path(input_path)
-        if path.is_dir():
-            matches = sorted(path.glob("*.pdf"))
-        else:
-            matches = [path]
-
-    pdfs = [path for path in matches if path.is_file() and path.suffix.lower() == ".pdf"]
-    if not pdfs:
-        raise typer.BadParameter(f"No PDF files found for input: {input_path}")
-    return pdfs
-
-
-def parse_itau(
-        input_paths: list[str],
-        year: str | None = None,
-        total: str | None = None,
-        debug: bool = False,
-        sort: str | None = None,
-        layout: Layout | None = None,
-        merge: bool = False,
-        no_headers: bool = False,
-        enhanced: bool = False,
-        output: Path | None = None,
-        rename: bool = False,
-) -> None:
-    """Parse Itaú credit card PDF(s) into CSV lines (id: YYYY-MMM-index)."""
-
-    if debug and input_paths:
-        first = input_paths[0].lower()
-        if first in {mode.value for mode in DebugMode}:
-            debug_mode = DebugMode(first)
-            input_paths = input_paths[1:]
-
-    if not input_paths:
-        raise typer.BadParameter("Missing input path.")
-    if len(input_paths) > 1:
-        raise typer.BadParameter("Only one input path is supported.")
-
-    pdf_paths = resolve_itau_inputs(input_paths[0])
-
-    all_rows: list[str] = []
-    total_mismatches: list[str] = []
-    total_missing: list[str] = []
-
-    manual_total = None
-    if total is not None:
-        cleaned = total.strip()
-        if "," in cleaned:
-            manual_total = parse_brl_amount(cleaned)
-        else:
-            try:
-                manual_total = float(cleaned)
-            except ValueError as exc:
-                raise typer.BadParameter(f"Invalid total: {total}") from exc
-
-    if len(pdf_paths) > 1 and output is not None and not merge:
-        raise typer.BadParameter("Use --merge when specifying --output with multiple PDFs.")
-
-    def sort_rows(rows: list[str]) -> list[str]:
-        if not sort:
-            return rows
-        parts = sort.strip().split()
-        if len(parts) == 1:
-            column, direction = parts[0].lower(), "asc"
-        elif len(parts) == 2:
-            column, direction = parts[0].lower(), parts[1].lower()
-        else:
-            raise typer.BadParameter("Sort must be '<column>' or '<column> <ASC|DESC>'.")
-        if direction not in {"asc", "desc"}:
-            raise typer.BadParameter("Sort direction must be ASC or DESC.")
-
-        valid_columns = {
-            "index",
-            "transaction_date",
-            "payment_date",
-            "description",
-            "amount",
-        }
-        if column not in valid_columns:
-            raise typer.BadParameter(
-                "Sort column must be one of: index, transaction_date, payment_date, description, amount."
-            )
-
-        def sort_key(row: str):
-            fields = row.split(",", 6)
-            if len(fields) < 5:
-                return row
-            if column == "index":
-                return int(fields[0])
-            if column == "transaction_date":
-                return datetime.strptime(fields[1], "%d/%m/%y")
-            if column == "payment_date":
-                return datetime.strptime(fields[2], "%d/%m/%y") if fields[2] else datetime.min
-            if column == "description":
-                return fields[3]
-            if column == "amount":
-                return float(fields[4])
-            return row
-
-        return sorted(rows, key=sort_key, reverse=direction == "desc")
-
-    for pdf_path in pdf_paths:
-        resolved_year = year or extract_issue_year(pdf_path) or datetime.now().strftime("%y")
-        payment_date = extract_payment_date(pdf_path)
-        layout_for_pdf = resolve_layout(payment_date)
-        text_blocks = _extract_blocks(pdf_path, layout_for_pdf)
-        statements = _blocks_to_statements(
-            text_blocks, resolved_year, payment_date, enhanced=enhanced
-        )
-        expected_total = (
-            manual_total if manual_total is not None else _extract_total_from_pdf(pdf_path)
-        )
-
-        if expected_total is None:
-            total_missing.append(str(pdf_path))
-        else:
-            try:
-                check_total(statements, expected_total)
-            except ValueError as exc:
-                total_mismatches.append(f"{pdf_path}: {exc}")
-
-        rows = _flip_sign_last_column(statements)
-
-        if rename:
-            last4 = extract_card_last4(pdf_path)
-            if not last4:
-                raise typer.BadParameter(f"Could not find card last 4 for {pdf_path}.")
-            month_info = month_number_for_date(payment_date or "")
-            if month_info is None:
-                raise typer.BadParameter(
-                    f"Could not determine statement month for {pdf_path}."
-                )
-            year_full, month_number = month_info
-            target = pdf_path.with_name(
-                f"Itau_{last4}_{year_full}_{month_number}{pdf_path.suffix.lower()}"
-            )
-            if target != pdf_path:
-                if target.exists():
-                    raise typer.BadParameter(f"Rename target already exists: {target}")
-                pdf_path.rename(target)
-                typer.echo(f"Renamed {pdf_path} to {target}")
-                pdf_path = target
-
-        if merge:
-            all_rows.extend(rows)
-        else:
-            rows = sort_rows(rows)
-            rows = _localize_rows(rows)
-            if output is None:
-                per_file_output = pdf_path.with_suffix(".csv")
-                headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS
-                write_csv_lines(
-                    rows, per_file_output, include_headers=not no_headers, headers=headers
-                )
-                typer.echo(f"Wrote {len(rows)} rows to {per_file_output}")
-            else:
-                headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS
-                added = write_csv_lines_idempotent(
-                    rows, output, include_headers=not no_headers, headers=headers
-                )
-                typer.echo(f"Wrote {added} new rows to {output}")
-
-    if merge:
-        if sort:
-            all_rows = sort_rows(all_rows)
-        all_rows = _localize_rows(all_rows)
-        if output is None:
-            headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS
-            write_csv_lines(
-                all_rows, output, include_headers=not no_headers, headers=headers
-            )
-        else:
-            headers = CSV_HEADERS_ENHANCED if enhanced else CSV_HEADERS
-            added = write_csv_lines_idempotent(
-                all_rows, output, include_headers=not no_headers, headers=headers
-            )
-            typer.echo(f"Wrote {added} new rows to {output}")
-
-    if total_mismatches:
-        typer.echo("Warning: total mismatches found:", err=True)
-        for message in total_mismatches:
-            typer.echo(f"- {message}", err=True)
-
-    if total_missing:
-        typer.echo("Warning: totals not found in:", err=True)
-        for path in total_missing:
-            typer.echo(f"- {path}", err=True)
 
 
 def resolve_itau_inputs(input_path: str) -> list[Path]:

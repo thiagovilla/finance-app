@@ -2,14 +2,14 @@ import fitz
 
 from finance_cli.itau import get_pdf_text
 from itau_pdf.layout import _iter_pages, _iter_lines, _has_marker
-from itau_pdf.metadata import extract_issue_date
+from itau_pdf.metadata import _extract_issue_date
 
 
 def annotate_pdf(pdf_path: str, output_path: str | None = None) -> None:
     """Annotate PDF with x split and block coordinates."""
     doc = fitz.open(pdf_path)
     text = get_pdf_text(pdf_path)
-    issue_date = extract_issue_date(text)
+    issue_date = _extract_issue_date(text)
     start_marker = False
     for page in _iter_pages(doc):
         page_rect = page.pdf.rect

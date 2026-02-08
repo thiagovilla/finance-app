@@ -12,11 +12,11 @@ dependencies = [
   "openai>=1.40",
   "python-dotenv>=1.0",
   "notion-client>=2.2",
+  "rich>=13.0",
 ]
 
 [project.scripts]
-#finance = "finance_cli.cli:app"
-finance = "finance_cli.debug_cli:app"
+finance = "finance_cli.cli:app"
 
 [project.optional-dependencies]
 dev = [

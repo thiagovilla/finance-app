@@ -1,6 +1,5 @@
 import re
 import unicodedata
-from datetime import datetime, date
 
 
 def normalize_text(text: str) -> str:
@@ -16,33 +15,3 @@ def parse_brl_amount(value: str) -> float:
     """Parse a BRL-formatted amount (1.234,56) into a float."""
     cleaned = value.replace(" ", "").replace(".", "").replace(",", ".")
     return float(cleaned)
-
-
-def dmy_to_mdy(date_str: str) -> str:
-    """Format DD/MM/YY to MM/DD/YY for CSV output."""
-    if not date_str:
-        return date_str
-    try:
-        parsed = datetime.strptime(date_str, "%d/%m/%y")
-    except ValueError:
-        return date_str
-    return parsed.strftime("%m/%d/%y")
-
-
-def parse_dm_date(date_str: str) -> date:
-    """Parse a date string in DD/MM format."""
-    return datetime.strptime(date_str, "%d/%m").date()
-
-# --------------- UTILS ---------------
-
-# def _generate_itau_id(date_str: str, index: int) -> str:
-#     """Helper to generate the YYYY-MMM-index ID."""
-#     try:
-#         # date_str is either DD/MM/YY (from match_to_csv) or payment_date
-#         parsed = datetime.strptime(date_str, "%d/%m/%y")
-#         year = parsed.strftime("%Y")
-#         month = MONTH_ABBREVIATIONS[parsed.month - 1]
-#     except ValueError:
-#         year = "0000"
-#         month = "UNK"
-#     return f"{year}-{month}-{index}"
