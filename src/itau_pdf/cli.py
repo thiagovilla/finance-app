@@ -74,7 +74,7 @@ def parse_pdf(
         glob_pattern: str = typer.Argument(..., help="Path or glob pattern for Itaú PDF files."),
         output: Path | None = typer.Option(None, "--output", "-o", help="Output CSV path."),
         merge: bool = typer.Option(False, "--merge", "-m", help="Merge all PDFs into a single CSV."),
-        append: bool = typer.Option(False, "--append", "-a", help="Append to existing CSV."),
+        force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing output file completely."),
 ) -> None:
     """Parse Itaú PDFs, validate metadata, and export to CSV."""
     pdf_paths = resolve_itau_inputs(glob_pattern)
@@ -100,7 +100,7 @@ def parse_pdf(
             else:
                 # Individual processing
                 target_output = output or pdf_path.with_suffix(".csv")
-                count = write_statements_csv(common_stmts, target_output, append=append)
+                count = write_statements_csv(common_stmts, target_output, force=force)
                 console.print(f"[green]Parsed {pdf_path.name}:[/green] {count} statements -> {target_output}")
 
         except Exception as e:
@@ -108,7 +108,7 @@ def parse_pdf(
 
     if merge and all_common_stmts:
         target_output = output or Path("merged_statements.csv")
-        count = write_statements_csv(all_common_stmts, target_output, append=append)
+        count = write_statements_csv(all_common_stmts, target_output, force=force)
         console.print(f"[bold green]Merged success![/bold green] Wrote {count} statements to {target_output}")
 
 

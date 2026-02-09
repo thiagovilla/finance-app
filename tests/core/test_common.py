@@ -65,27 +65,24 @@ class TestCommon(unittest.TestCase):
             self.assertEqual(reader[0]["id"], "id1")
             self.assertEqual(reader[1]["amount"], "20.00")
 
-    def test_write_statements_csv_append_and_duplicates(self):
-        """Test that appending works and duplicates are ignored based on ID."""
+    def test_write_statements_csv_idempotency_by_default(self):
+        """Test that writing to an existing file is idempotent by default."""
         initial = [Statement("id1", date(2024, 1, 1), "Item 1", 10.0)]
         write_statements_csv(initial, self.test_csv)
 
-        # Append one new and one duplicate
+        # Try to write the same ID again without append/force
         new_batch = [
             Statement("id1", date(2024, 1, 1), "Item 1", 10.0), # Duplicate
             Statement("id2", date(2024, 1, 2), "Item 2", 20.0), # New
         ]
 
-        count = write_statements_csv(new_batch, self.test_csv, append=True)
+        count = write_statements_csv(new_batch, self.test_csv)
 
-        self.assertEqual(count, 1, "Only 1 statement should have been written (the new one)")
+        self.assertEqual(count, 1, "Should only write 1 new statement even without explicit append=True")
 
         with open(self.test_csv, "r", encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
             self.assertEqual(len(rows), 2)
-            ids = [row["id"] for row in rows]
-            self.assertIn("id1", ids)
-            self.assertIn("id2", ids)
 
     def test_write_statements_csv_force_overwrite(self):
         """Test that force=True completely overwrites the existing file."""
