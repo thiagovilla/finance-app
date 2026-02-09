@@ -18,6 +18,9 @@ dependencies = [
 [project.scripts]
 finance = "finance_cli.cli:app"
 
+[tool.uv]
+package = true
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3",

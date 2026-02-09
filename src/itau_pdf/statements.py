@@ -10,7 +10,7 @@ from itau_pdf.utils import parse_brl_amount, normalize_text
 @dataclass(frozen=True)
 class Statement:
     id: str = ""
-    date: "str | date" = ""  # Kept as DD/MM string
+    date: "str | date" = ""
     description: str = ""
     amount: float = 0.0
     category: str = ""
