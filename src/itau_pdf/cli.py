@@ -71,55 +71,45 @@ def check_pdfs(
 
 @app.command("parse")
 def parse_pdf(
-        pdf_path: Path = typer.Argument(..., help="Path to the Itaú PDF file."),
-        output: Path | None = typer.Option(None, "--output", "-o", help="Output CSV path (defaults to <pdf_name>.csv)."),
+        glob_pattern: str = typer.Argument(..., help="Path or glob pattern for Itaú PDF files."),
+        output: Path | None = typer.Option(None, "--output", "-o", help="Output CSV path."),
+        merge: bool = typer.Option(False, "--merge", "-m", help="Merge all PDFs into a single CSV."),
         append: bool = typer.Option(False, "--append", "-a", help="Append to existing CSV."),
 ) -> None:
-    """Parse an Itaú PDF, validate metadata, and check statement sums."""
-    if not pdf_path.exists():
-        console.print(f"[red]Error: File {pdf_path} not found.[/red]")
+    """Parse Itaú PDFs, validate metadata, and export to CSV."""
+    pdf_paths = resolve_itau_inputs(glob_pattern)
+    if not pdf_paths:
+        console.print(f"[red]No files found matching: {glob_pattern}[/red]")
         raise typer.Exit(1)
 
-    try:
-        meta, statements, statement_sum = _process_pdf(pdf_path)
-    except ValueError as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-    console.print(
-        f"[green]Metadata loaded:[/green] Card: {meta.last4} | Total: R$ {meta.total:.2f} | Due: {meta.payment_date}")
-
-    # 4. Validate Sum
-    if round(statement_sum, 2) != -round(meta.total, 2):
-        console.print(
-            f"[red]Error: Metadata total (R$ {meta.total:.2f}) does not match statement sum (R$ {statement_sum:.2f}) - Difference: R$ {abs(meta.total + statement_sum):.2f}[/red]")
-        raise typer.Exit(1)
-
-    # 5. Export or Print
-    target_output = output or pdf_path.with_suffix(".csv")
+    all_common_stmts = []
     
-    common_stmts = [s.to_common(meta.payment_date, account=f"itau_{meta.last4}") for s in statements]
-    count = write_statements_csv(common_stmts, target_output, append=append)
-    
-    console.print(f"[bold green]Success![/bold green] Wrote {count} statements to {target_output}")
-    
-    # Optional: Keep the table print if you want visual confirmation even when saving
-    table = Table(title=f"Statements for {pdf_path.name}")
-    table.add_column("Date", style="cyan")
-    table.add_column("Description")
-    table.add_column("Amount", justify="right", style="green")
-    table.add_column("Category", style="magenta")
-    table.add_column("Location", style="yellow")
-    for s in statements:
-        table.add_row(
-            s.date.strftime("%d/%m/%Y"),
-            s.description,
-            f"{s.amount:.2f}",
-            s.category,
-            s.location or "-"
-        )
-    console.print(table)
-    console.print(f"\n[bold green]Success![/bold green] Total R$ {-statement_sum:.2f} matches metadata.")
+    for pdf_path in pdf_paths:
+        try:
+            meta, statements, statement_sum = _process_pdf(pdf_path)
+            
+            # Validate Sum
+            if round(statement_sum, 2) != -round(meta.total, 2):
+                console.print(f"[red]Error in {pdf_path.name}: Sum mismatch (Diff: {abs(meta.total + statement_sum):.2f})[/red]")
+                if not merge: continue # Skip this file if not merging
+
+            common_stmts = [s.to_common(meta.payment_date, account=f"itau_{meta.last4}") for s in statements]
+            
+            if merge:
+                all_common_stmts.extend(common_stmts)
+            else:
+                # Individual processing
+                target_output = output or pdf_path.with_suffix(".csv")
+                count = write_statements_csv(common_stmts, target_output, append=append)
+                console.print(f"[green]Parsed {pdf_path.name}:[/green] {count} statements -> {target_output}")
+
+        except Exception as e:
+            console.print(f"[red]Failed to process {pdf_path.name}: {e}[/red]")
+
+    if merge and all_common_stmts:
+        target_output = output or Path("merged_statements.csv")
+        count = write_statements_csv(all_common_stmts, target_output, append=append)
+        console.print(f"[bold green]Merged success![/bold green] Wrote {count} statements to {target_output}")
 
 
 @app.command("debug")
