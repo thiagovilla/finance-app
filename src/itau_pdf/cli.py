@@ -9,6 +9,7 @@ from itau_pdf.layout import iter_lines
 from itau_pdf.statements import parse_lines
 from itau_pdf.debug import annotate_pdf, filter_statement_lines
 from finance_cli.utils import resolve_itau_inputs
+from core.common import write_statements_csv
 
 app = typer.Typer()
 console = Console()
@@ -71,6 +72,8 @@ def check_pdfs(
 @app.command("parse")
 def parse_pdf(
         pdf_path: Path = typer.Argument(..., help="Path to the Itaú PDF file."),
+        output: Path | None = typer.Option(None, "--output", "-o", help="Output CSV path (defaults to <pdf_name>.csv)."),
+        append: bool = typer.Option(False, "--append", "-a", help="Append to existing CSV."),
 ) -> None:
     """Parse an Itaú PDF, validate metadata, and check statement sums."""
     if not pdf_path.exists():
@@ -92,14 +95,21 @@ def parse_pdf(
             f"[red]Error: Metadata total (R$ {meta.total:.2f}) does not match statement sum (R$ {statement_sum:.2f}) - Difference: R$ {abs(meta.total + statement_sum):.2f}[/red]")
         raise typer.Exit(1)
 
-    # 5. Print Statements
+    # 5. Export or Print
+    target_output = output or pdf_path.with_suffix(".csv")
+    
+    common_stmts = [s.to_common(meta.payment_date, account=f"itau_{meta.last4}") for s in statements]
+    count = write_statements_csv(common_stmts, target_output, append=append)
+    
+    console.print(f"[bold green]Success![/bold green] Wrote {count} statements to {target_output}")
+    
+    # Optional: Keep the table print if you want visual confirmation even when saving
     table = Table(title=f"Statements for {pdf_path.name}")
     table.add_column("Date", style="cyan")
     table.add_column("Description")
     table.add_column("Amount", justify="right", style="green")
     table.add_column("Category", style="magenta")
     table.add_column("Location", style="yellow")
-
     for s in statements:
         table.add_row(
             s.date.strftime("%d/%m/%Y"),
@@ -108,7 +118,6 @@ def parse_pdf(
             s.category,
             s.location or "-"
         )
-
     console.print(table)
     console.print(f"\n[bold green]Success![/bold green] Total R$ {-statement_sum:.2f} matches metadata.")
 

@@ -5,6 +5,7 @@ from typing import Iterator
 
 from itau_pdf.layout import Line
 from itau_pdf.utils import parse_brl_amount, normalize_text
+from core.common import Statement as CommonStatement
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,19 @@ class Statement:
     amount: float = 0.0
     category: str = ""
     location: str = ""
+
+    def to_common(self, payment_date: date, account: str = "itau_cc") -> CommonStatement:
+        """Adapts this Itaú statement to the core common Statement format."""
+        return CommonStatement(
+            id=self.id,
+            transaction_date=self.date if isinstance(self.date, date) else payment_date,
+            payment_date=payment_date,
+            description=self.description,
+            amount=self.amount,
+            category=self.category,
+            location=self.location,
+            account=account
+        )
 
 
 def parse_lines(lines: Iterator[Line], payment_date: date) -> Iterator[Statement]:
