@@ -872,7 +872,7 @@ def _ai_ranked_suggestions(
     return [(category, (1.0, 0)) for category in result.categories]
 
 
-@app.command("group")
+@app.command("category")
 def group() -> None:
     """Placeholder for future grouping features."""
     typer.echo("Group is not implemented yet.")
