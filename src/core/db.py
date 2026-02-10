@@ -1,16 +1,13 @@
 from __future__ import annotations
-
-import csv
-import hashlib
-import re
+from datetime import datetime, timezone
 import sqlite3
-import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
+
+from common import canonicalize_description
 
 EN_US_MONTH_ABBREVIATIONS = [
     "JAN",
@@ -114,111 +111,19 @@ def init_db(db_value: str | Path | DatabaseConfig) -> None:
             conn.execute(statement)
 
 
-def import_csv(
-    db_value: str | Path | DatabaseConfig,
-    csv_path: Path,
-    source: str,
-    currency: str = "BRL",
-) -> ImportResult:
-    if not csv_path.exists():
-        raise FileNotFoundError(csv_path)
-
-    init_db(db_value)
-
-    inserted = 0
-    skipped = 0
-
-    with csv_path.open("r", newline="", encoding="utf-8") as csvfile:
-        reader = csv.DictReader(csvfile)
-        rows = list(reader)
-
-    if not rows:
-        return ImportResult(inserted=0, skipped=0)
-
-    with connect_db(db_value) as conn:
-        for row in rows:
-            normalized = _normalize_row(row)
-            txn_date = _parse_date(normalized.transaction_date)
-            if txn_date is None:
-                skipped += 1
-                continue
-            post_date = (
-                _parse_date(normalized.payment_date) if normalized.payment_date else None
-            )
-            amount_cents = _parse_amount_cents(normalized.amount)
-            canonical = canonicalize_description(normalized.description)
-            raw_import_id = normalized.raw_id
-            if raw_import_id is None and source == "itau_cc":
-                if not normalized.index:
-                    raise ValueError("Missing index column for Itaú CSV import.")
-                raw_import_id = _itau_import_id(
-                    normalized.payment_date or normalized.transaction_date,
-                    normalized.index,
-                )
-            if raw_import_id is None:
-                raw_import_id = _hash_import_id(
-                    source=source,
-                    txn_date=txn_date,
-                    post_date=post_date,
-                    description=normalized.description,
-                    amount_cents=amount_cents,
-                )
-            created_at = _now_iso()
-
-            cursor = conn.execute(
-                """
-                INSERT INTO statements (
-                    source,
-                    txn_date,
-                    post_date,
-                    description,
-                    canonical_description,
-                    amount_cents,
-                    currency,
-                    raw_import_id,
-                    category,
-                    tags,
-                    location,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(raw_import_id) DO NOTHING
-                """,
-                (
-                    source,
-                    txn_date,
-                    post_date,
-                    normalized.description,
-                    canonical,
-                    amount_cents,
-                    currency,
-                    raw_import_id,
-                    normalized.category,
-                    normalized.tags,
-                    normalized.location,
-                    created_at,
-                ),
-            )
-            if cursor.rowcount == 1:
-                inserted += 1
-            else:
-                skipped += 1
-
-    return ImportResult(inserted=inserted, skipped=skipped)
-
-
 def upsert_statement(
-    conn: DBConnection,
-    *,
-    source: str,
-    txn_date: str,
-    post_date: str | None,
-    description: str,
-    amount_cents: int,
-    currency: str,
-    raw_import_id: str,
-    category: str | None,
-    tags: str | None,
-    location: str | None = None,
+        conn: DBConnection,
+        *,
+        source: str,
+        txn_date: str,
+        post_date: str | None,
+        description: str,
+        amount_cents: int,
+        currency: str,
+        raw_import_id: str,
+        category: str | None,
+        tags: str | None,
+        location: str | None = None,
 ) -> bool:
     canonical = canonicalize_description(description)
     created_at = _now_iso()
@@ -269,8 +174,8 @@ def upsert_statement(
 
 
 def fetch_uncategorized_canonicals(
-    conn: DBConnection,
-    source: str | None = None,
+        conn: DBConnection,
+        source: str | None = None,
 ) -> list[str]:
     query = (
         "SELECT DISTINCT canonical_description FROM statements "
@@ -285,8 +190,8 @@ def fetch_uncategorized_canonicals(
 
 
 def get_categorization(
-    conn: DBConnection,
-    canonical_description: str,
+        conn: DBConnection,
+        canonical_description: str,
 ) -> Categorization | None:
     row = conn.execute(
         """
@@ -338,12 +243,12 @@ def upsert_setting(conn: DBConnection, key: str, value: str) -> None:
 
 
 def upsert_categorization(
-    conn: DBConnection,
-    canonical_description: str,
-    category: str,
-    tags: str | None,
-    confidence: float | None,
-    source: str,
+        conn: DBConnection,
+        canonical_description: str,
+        category: str,
+        tags: str | None,
+        confidence: float | None,
+        source: str,
 ) -> None:
     now = _now_iso()
     upsert_categorization_full(
@@ -359,15 +264,15 @@ def upsert_categorization(
 
 
 def upsert_categorization_full(
-    conn: DBConnection,
-    *,
-    canonical_description: str,
-    category: str,
-    tags: str | None,
-    confidence: float | None,
-    source: str,
-    created_at: str,
-    updated_at: str,
+        conn: DBConnection,
+        *,
+        canonical_description: str,
+        category: str,
+        tags: str | None,
+        confidence: float | None,
+        source: str,
+        created_at: str,
+        updated_at: str,
 ) -> None:
     conn.execute(
         """
@@ -400,10 +305,10 @@ def upsert_categorization_full(
 
 
 def apply_categorization_to_statements(
-    conn: DBConnection,
-    canonical_description: str,
-    category: str,
-    tags: str | None,
+        conn: DBConnection,
+        canonical_description: str,
+        category: str,
+        tags: str | None,
 ) -> int:
     cursor = conn.execute(
         """
@@ -418,9 +323,9 @@ def apply_categorization_to_statements(
 
 
 def get_sample_statement_by_canonical(
-    conn: DBConnection,
-    canonical_description: str,
-    source: str | None = None,
+        conn: DBConnection,
+        canonical_description: str,
+        source: str | None = None,
 ) -> StatementPreview | None:
     query = (
         "SELECT id, source, txn_date, description, canonical_description, amount_cents "
@@ -445,8 +350,8 @@ def get_sample_statement_by_canonical(
 
 
 def get_statement_by_id(
-    conn: DBConnection,
-    statement_id: int,
+        conn: DBConnection,
+        statement_id: int,
 ) -> StatementPreview | None:
     row = conn.execute(
         """
@@ -469,10 +374,10 @@ def get_statement_by_id(
 
 
 def find_statements_by_description(
-    conn: DBConnection,
-    description_glob: str,
-    source: str | None = None,
-    limit: int = 50,
+        conn: DBConnection,
+        description_glob: str,
+        source: str | None = None,
+        limit: int = 50,
 ) -> list[StatementPreview]:
     like_pattern = _glob_to_like(description_glob)
     query = (
@@ -514,7 +419,7 @@ def list_category_counts(conn: DBConnection) -> dict[str, int]:
 
 
 def list_categorization_candidates(
-    conn: DBConnection,
+        conn: DBConnection,
 ) -> list[tuple[str, str]]:
     rows = conn.execute(
         """
@@ -526,7 +431,7 @@ def list_categorization_candidates(
 
 
 def list_categorizations(
-    conn: DBConnection,
+        conn: DBConnection,
 ) -> list[tuple[str, str, str | None, float | None, str, str, str]]:
     rows = conn.execute(
         """
@@ -541,8 +446,8 @@ def list_categorizations(
 
 
 def list_uncategorized_canonicals_with_counts(
-    conn: DBConnection,
-    source: str | None = None,
+        conn: DBConnection,
+        source: str | None = None,
 ) -> list[tuple[str, int]]:
     query = (
         "SELECT canonical_description, COUNT(*) "
@@ -559,8 +464,8 @@ def list_uncategorized_canonicals_with_counts(
 
 
 def list_statements_with_categories(
-    conn: DBConnection,
-    source: str | None = None,
+        conn: DBConnection,
+        source: str | None = None,
 ) -> list[tuple[str, str]]:
     query = (
         "SELECT raw_import_id, category "
@@ -576,8 +481,8 @@ def list_statements_with_categories(
 
 
 def get_notion_sync_state(
-    conn: DBConnection,
-    external_id: str,
+        conn: DBConnection,
+        external_id: str,
 ) -> tuple[str | None, bool] | None:
     row = conn.execute(
         """
@@ -592,33 +497,9 @@ def get_notion_sync_state(
     return row[0], bool(row[1])
 
 
-def upsert_notion_sync_state(
-    conn: DBConnection,
-    *,
-    external_id: str,
-    category: str | None,
-    reconciled: bool,
-) -> None:
-    conn.execute(
-        """
-        INSERT INTO notion_sync_state (
-            external_id,
-            last_category,
-            last_reconciled,
-            updated_at
-        ) VALUES (?, ?, ?, ?)
-        ON CONFLICT(external_id) DO UPDATE SET
-            last_category=excluded.last_category,
-            last_reconciled=excluded.last_reconciled,
-            updated_at=excluded.updated_at
-        """,
-        (external_id, category, int(reconciled), _now_iso()),
-    )
-
-
 def recanonicalize_statements(
-    conn: DBConnection,
-    source: str | None = None,
+        conn: DBConnection,
+        source: str | None = None,
 ) -> int:
     query = "SELECT id, description, canonical_description FROM statements"
     params: list[str] = []
@@ -758,81 +639,6 @@ def _normalize_row(row: dict[str, str | None]) -> NormalizedRow:
         tags=pick("tags"),
         location=pick("location"),
     )
-
-
-def canonicalize_description(value: str) -> str:
-    cleaned = value.strip().lower()
-    cleaned = unicodedata.normalize("NFKD", cleaned)
-    cleaned = "".join(
-        char for char in cleaned if not unicodedata.combining(char)
-    )
-    cleaned = re.sub(r"\b(?:parc|parcela|parcelado|parcelamento)\b", " ", cleaned)
-    cleaned = re.sub(r"\b\w+\d{1,2}\s*/\s*\d{1,2}\b", " ", cleaned)
-    cleaned = re.sub(r"\b\w+\d{1,2}\s+\d{1,2}\b", " ", cleaned)
-    cleaned = re.sub(r"\b\d{1,2}\s*/\s*\d{1,2}\b", " ", cleaned)
-    cleaned = re.sub(r"[^\w\s]", " ", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    previous = None
-    while cleaned != previous:
-        previous = cleaned
-        cleaned = re.sub(r"\b([a-z])\s+(?=[a-z]\b)", r"\1", cleaned)
-    return cleaned.strip()
-
-
-def _parse_date(value: str) -> str | None:
-    value = value.strip()
-    formats = [
-        "%d/%m/%Y",
-        "%d/%m/%y",
-        "%m/%d/%Y",
-        "%m/%d/%y",
-        "%Y-%m-%d",
-    ]
-    for fmt in formats:
-        try:
-            return datetime.strptime(value, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return None
-
-
-def _parse_amount_cents(value: str) -> int:
-    cleaned = value.strip().replace(" ", "")
-    if "," in cleaned and "." in cleaned:
-        if cleaned.rfind(",") > cleaned.rfind("."):
-            cleaned = cleaned.replace(".", "").replace(",", ".")
-        else:
-            cleaned = cleaned.replace(",", "")
-    elif "," in cleaned:
-        cleaned = cleaned.replace(".", "").replace(",", ".")
-    amount = float(cleaned)
-    return int(round(amount * 100))
-
-
-def _itau_import_id(payment_date: str, index: str) -> str:
-    parsed = _parse_date(payment_date)
-    if parsed is None:
-        raise ValueError(f"Invalid payment date for Itaú import: {payment_date}")
-    year, month, _ = parsed.split("-", 2)
-    try:
-        index_value = int(index)
-    except ValueError as exc:
-        raise ValueError(f"Invalid index for Itaú import: {index}") from exc
-    month_abbrev = EN_US_MONTH_ABBREVIATIONS[int(month) - 1]
-    return f"{year}-{month_abbrev}-{index_value}"
-
-
-def _hash_import_id(
-    *,
-    source: str,
-    txn_date: str,
-    post_date: str | None,
-    description: str,
-    amount_cents: int,
-) -> str:
-    parts = [source, txn_date, post_date or "", description, str(amount_cents)]
-    digest = hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()
-    return f"sha1:{digest}"
 
 
 def _now_iso() -> str:
