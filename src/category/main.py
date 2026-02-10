@@ -1,22 +1,9 @@
-from dataclasses import dataclass
 from typing import List
 
+from category.models import Suggestion, Category
 from core.common import canonicalize_description
 from core.db import connect_db
-from ai import ask_single
-
-
-@dataclass(frozen=True)
-class Category:
-    name: str
-    description: str = ""
-
-
-@dataclass(frozen=True)
-class Suggestion:
-    category: Category
-    confidence: float
-
+from category.ai import ask_single
 
 def categorize(description: str, threshold=0.85, ai_hint=""):
     """

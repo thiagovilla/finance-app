@@ -1,6 +1,6 @@
 from typing import List
 
-from category.main import Suggestion
+from category.models import Suggestion
 from core.ai import ask_ai
 from core.common import parse_json
 

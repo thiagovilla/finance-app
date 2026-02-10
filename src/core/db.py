@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import os
 from datetime import datetime, timezone
 import sqlite3
 from contextlib import contextmanager
@@ -7,7 +9,7 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
-from common import canonicalize_description
+from core.common import canonicalize_description
 
 EN_US_MONTH_ABBREVIATIONS = [
     "JAN",
@@ -652,7 +654,7 @@ def _connect(db: DatabaseConfig):
 
 
 @contextmanager
-def connect_db(db_value: str | Path | DatabaseConfig):
+def connect_db(db_value = os.getenv("DATABASE_URL")):
     db = resolve_database(db_value)
     conn = _connect(db)
     wrapper = DBConnection(kind=db.kind, raw=conn)
