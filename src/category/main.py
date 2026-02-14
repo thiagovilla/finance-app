@@ -73,3 +73,4 @@ def fuzzy_search(conn, canonical_description: str, limit=5) -> List[Suggestion]:
         ))
 
     return suggestions
+

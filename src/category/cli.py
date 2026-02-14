@@ -49,3 +49,10 @@ def update_category(
         return
     manage.update_category(category_id, name, description or category.description)
     typer.echo(f"Updated category {category_id}")
+
+
+@app.command("normalize")
+def normalize_categories(force: bool = typer.Option(False, "--force", "-f", help="Force normalization even if no changes are needed.")) -> None:
+    """Normalize category names."""
+    app.normalize_categories(force)
+    typer.echo("Category names and descriptions normalized.")

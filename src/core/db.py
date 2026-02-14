@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
-from core.common import canonicalize_description
+from core.utils import normalize_description
 
 EN_US_MONTH_ABBREVIATIONS = [
     "JAN",
@@ -84,7 +84,7 @@ class ImportResult:
 
 @dataclass(frozen=True)
 class Categorization:
-    canonical_description: str
+    normalized_description: str
     category: str
     tags: str | None
     confidence: float | None
@@ -99,7 +99,7 @@ class StatementPreview:
     source: str
     txn_date: str
     description: str
-    canonical_description: str
+    normalized_description: str
     amount_cents: int
 
 
@@ -127,7 +127,7 @@ def upsert_statement(
         tags: str | None,
         location: str | None = None,
 ) -> bool:
-    canonical = canonicalize_description(description)
+    normalized = normalize_description(description)
     created_at = _now_iso()
     cursor = conn.execute(
         """
@@ -136,7 +136,7 @@ def upsert_statement(
             txn_date,
             post_date,
             description,
-            canonical_description,
+            normalized_description,
             amount_cents,
             currency,
             raw_import_id,
@@ -150,7 +150,7 @@ def upsert_statement(
             txn_date=excluded.txn_date,
             post_date=excluded.post_date,
             description=excluded.description,
-            canonical_description=excluded.canonical_description,
+            normalized_description=excluded.normalized_description,
             amount_cents=excluded.amount_cents,
             currency=excluded.currency,
             category=excluded.category,
@@ -162,7 +162,7 @@ def upsert_statement(
             txn_date,
             post_date,
             description,
-            canonical,
+            normalized,
             amount_cents,
             currency,
             raw_import_id,
@@ -175,12 +175,12 @@ def upsert_statement(
     return cursor.rowcount == 1
 
 
-def fetch_uncategorized_canonicals(
+def fetch_uncategorized_normalizeds(
         conn: DBConnection,
         source: str | None = None,
 ) -> list[str]:
     query = (
-        "SELECT DISTINCT canonical_description FROM statements "
+        "SELECT DISTINCT normalized_description FROM statements "
         "WHERE (category IS NULL OR category = '')"
     )
     params: list[str] = []
@@ -193,21 +193,21 @@ def fetch_uncategorized_canonicals(
 
 def get_categorization(
         conn: DBConnection,
-        canonical_description: str,
+        normalized_description: str,
 ) -> Categorization | None:
     row = conn.execute(
         """
-        SELECT canonical_description, category, tags, confidence, source,
+        SELECT normalized_description, category, tags, confidence, source,
                created_at, updated_at
         FROM categorizations
-        WHERE canonical_description = ?
+        WHERE normalized_description = ?
         """,
-        (canonical_description,),
+        (normalized_description,),
     ).fetchone()
     if row is None:
         return None
     return Categorization(
-        canonical_description=row[0],
+        normalized_description=row[0],
         category=row[1],
         tags=row[2],
         confidence=row[3],
@@ -246,7 +246,7 @@ def upsert_setting(conn: DBConnection, key: str, value: str) -> None:
 
 def upsert_categorization(
         conn: DBConnection,
-        canonical_description: str,
+        normalized_description: str,
         category: str,
         tags: str | None,
         confidence: float | None,
@@ -255,7 +255,7 @@ def upsert_categorization(
     now = _now_iso()
     upsert_categorization_full(
         conn,
-        canonical_description=canonical_description,
+        normalized_description=normalized_description,
         category=category,
         tags=tags,
         confidence=confidence,
@@ -268,7 +268,7 @@ def upsert_categorization(
 def upsert_categorization_full(
         conn: DBConnection,
         *,
-        canonical_description: str,
+        normalized_description: str,
         category: str,
         tags: str | None,
         confidence: float | None,
@@ -279,7 +279,7 @@ def upsert_categorization_full(
     conn.execute(
         """
         INSERT INTO categorizations (
-            canonical_description,
+            normalized_description,
             category,
             tags,
             confidence,
@@ -287,7 +287,7 @@ def upsert_categorization_full(
             created_at,
             updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(canonical_description) DO UPDATE SET
+        ON CONFLICT(normalized_description) DO UPDATE SET
             category=excluded.category,
             tags=excluded.tags,
             confidence=excluded.confidence,
@@ -295,7 +295,7 @@ def upsert_categorization_full(
             updated_at=excluded.updated_at
         """,
         (
-            canonical_description,
+            normalized_description,
             category,
             tags,
             confidence,
@@ -308,7 +308,7 @@ def upsert_categorization_full(
 
 def apply_categorization_to_statements(
         conn: DBConnection,
-        canonical_description: str,
+        normalized_description: str,
         category: str,
         tags: str | None,
 ) -> int:
@@ -316,24 +316,24 @@ def apply_categorization_to_statements(
         """
         UPDATE statements
         SET category = ?, tags = ?
-        WHERE canonical_description = ?
+        WHERE normalized_description = ?
           AND (category IS NULL OR category = '')
         """,
-        (category, tags, canonical_description),
+        (category, tags, normalized_description),
     )
     return cursor.rowcount
 
 
-def get_sample_statement_by_canonical(
+def get_sample_statement_by_normalized(
         conn: DBConnection,
-        canonical_description: str,
+        normalized_description: str,
         source: str | None = None,
 ) -> StatementPreview | None:
     query = (
-        "SELECT id, source, txn_date, description, canonical_description, amount_cents "
-        "FROM statements WHERE canonical_description = ?"
+        "SELECT id, source, txn_date, description, normalized_description, amount_cents "
+        "FROM statements WHERE normalized_description = ?"
     )
-    params: list[str] = [canonical_description]
+    params: list[str] = [normalized_description]
     if source:
         query += " AND source = ?"
         params.append(source)
@@ -346,7 +346,7 @@ def get_sample_statement_by_canonical(
         source=row[1],
         txn_date=row[2],
         description=row[3],
-        canonical_description=row[4],
+        normalized_description=row[4],
         amount_cents=int(row[5]),
     )
 
@@ -357,7 +357,7 @@ def get_statement_by_id(
 ) -> StatementPreview | None:
     row = conn.execute(
         """
-        SELECT id, source, txn_date, description, canonical_description, amount_cents
+        SELECT id, source, txn_date, description, normalized_description, amount_cents
         FROM statements
         WHERE id = ?
         """,
@@ -370,7 +370,7 @@ def get_statement_by_id(
         source=row[1],
         txn_date=row[2],
         description=row[3],
-        canonical_description=row[4],
+        normalized_description=row[4],
         amount_cents=int(row[5]),
     )
 
@@ -383,7 +383,7 @@ def find_statements_by_description(
 ) -> list[StatementPreview]:
     like_pattern = _glob_to_like(description_glob)
     query = (
-        "SELECT id, source, txn_date, description, canonical_description, amount_cents "
+        "SELECT id, source, txn_date, description, normalized_description, amount_cents "
         "FROM statements WHERE description LIKE ? ESCAPE '\\'"
     )
     params: list[str | int] = [like_pattern]
@@ -401,7 +401,7 @@ def find_statements_by_description(
             source=row[1],
             txn_date=row[2],
             description=row[3],
-            canonical_description=row[4],
+            normalized_description=row[4],
             amount_cents=int(row[5]),
         )
         for row in rows
@@ -425,7 +425,7 @@ def list_categorization_candidates(
 ) -> list[tuple[str, str]]:
     rows = conn.execute(
         """
-        SELECT canonical_description, category
+        SELECT normalized_description, category
         FROM categorizations
         """
     ).fetchall()
@@ -437,9 +437,9 @@ def list_categorizations(
 ) -> list[tuple[str, str, str | None, float | None, str, str, str]]:
     rows = conn.execute(
         """
-        SELECT canonical_description, category, tags, confidence, source, created_at, updated_at
+        SELECT normalized_description, category, tags, confidence, source, created_at, updated_at
         FROM categorizations
-        ORDER BY canonical_description
+        ORDER BY normalized_description
         """
     ).fetchall()
     return [
@@ -447,12 +447,12 @@ def list_categorizations(
     ]
 
 
-def list_uncategorized_canonicals_with_counts(
+def list_uncategorized_normalizeds_with_counts(
         conn: DBConnection,
         source: str | None = None,
 ) -> list[tuple[str, int]]:
     query = (
-        "SELECT canonical_description, COUNT(*) "
+        "SELECT normalized_description, COUNT(*) "
         "FROM statements "
         "WHERE (category IS NULL OR category = '')"
     )
@@ -460,7 +460,7 @@ def list_uncategorized_canonicals_with_counts(
     if source:
         query += " AND source = ?"
         params.append(source)
-    query += " GROUP BY canonical_description ORDER BY COUNT(*) DESC, canonical_description"
+    query += " GROUP BY normalized_description ORDER BY COUNT(*) DESC, normalized_description"
     rows = conn.execute(query, params).fetchall()
     return [(row[0], int(row[1])) for row in rows]
 
@@ -499,11 +499,11 @@ def get_notion_sync_state(
     return row[0], bool(row[1])
 
 
-def recanonicalize_statements(
+def normalize_statements(
         conn: DBConnection,
         source: str | None = None,
 ) -> int:
-    query = "SELECT id, description, canonical_description FROM statements"
+    query = "SELECT id, description, normalized_description FROM statements"
     params: list[str] = []
     if source:
         query += " WHERE source = ?"
@@ -514,27 +514,27 @@ def recanonicalize_statements(
         statement_id = int(row[0])
         description = row[1]
         current = row[2]
-        recalculated = canonicalize_description(description)
+        recalculated = normalize_description(description)
         if recalculated != current:
             conn.execute(
-                "UPDATE statements SET canonical_description = ? WHERE id = ?",
+                "UPDATE statements SET normalized_description = ? WHERE id = ?",
                 (recalculated, statement_id),
             )
             updated += 1
     return updated
 
 
-def recanonicalize_categorizations(conn: DBConnection) -> int:
+def normalize_categorizations(conn: DBConnection) -> int:
     rows = conn.execute(
         """
-        SELECT canonical_description, category, tags, confidence, source, created_at, updated_at
+        SELECT normalized_description, category, tags, confidence, source, created_at, updated_at
         FROM categorizations
         """
     ).fetchall()
     grouped: dict[str, tuple[str, str | None, float | None, str, str, str]] = {}
     for row in rows:
-        canonical = row[0]
-        recalculated = canonicalize_description(canonical)
+        normalized = row[0]
+        recalculated = normalize_description(normalized)
         category = row[1]
         tags = row[2]
         confidence = row[3]
@@ -558,7 +558,7 @@ def recanonicalize_categorizations(conn: DBConnection) -> int:
         conn.execute(
             """
             INSERT INTO categorizations (
-                canonical_description,
+                normalized_description,
                 category,
                 tags,
                 confidence,
@@ -568,7 +568,7 @@ def recanonicalize_categorizations(conn: DBConnection) -> int:
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                canonical,
+                normalized,
                 category,
                 tags,
                 confidence,
@@ -684,7 +684,7 @@ def _schema_statements(kind: str) -> list[str]:
             txn_date TEXT NOT NULL,
             post_date TEXT,
             description TEXT NOT NULL,
-            canonical_description TEXT NOT NULL,
+            normalized_description TEXT NOT NULL,
             amount_cents INTEGER NOT NULL,
             currency TEXT NOT NULL DEFAULT 'BRL',
             raw_import_id TEXT NOT NULL UNIQUE,
@@ -709,7 +709,7 @@ def _schema_statements(kind: str) -> list[str]:
         """
         CREATE TABLE IF NOT EXISTS categorizations (
             id INTEGER PRIMARY KEY,
-            canonical_description TEXT NOT NULL UNIQUE,
+            normalized_description TEXT NOT NULL UNIQUE,
             category TEXT NOT NULL,
             tags TEXT,
             confidence REAL,
