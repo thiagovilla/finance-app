@@ -59,3 +59,22 @@ def batch_update_normalized_descriptions(updates: list[tuple[str, str]]) -> int:
             return cursor.rowcount
     except Exception:
         return 0
+
+
+def get_uncategorized_counts() -> list[tuple[str, int]]:
+    """
+    Retrieve uncategorized normalized descriptions with their frequency count.
+    Returns:
+        List of tuples containing (normalized_description, count)
+    """
+    with connect_db() as conn:
+        cursor = conn.execute(
+            """
+            SELECT normalized_description, COUNT(*) as count
+            FROM statements
+            WHERE (category IS NULL OR category = '')
+            GROUP BY normalized_description
+            ORDER BY count DESC
+            """
+        )
+        return cursor.fetchall()

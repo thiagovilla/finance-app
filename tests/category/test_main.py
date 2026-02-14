@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock
-from category.main import categorize, find_exact_match
+from category.categorize import categorize, find_exact_match
 from category.models import Suggestion, Category
 
 

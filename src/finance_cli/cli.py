@@ -8,7 +8,7 @@ import glob
 import typer
 
 from itau_pdf.cli import app as itau_pdf
-from cli.category_cli import app as category_cli
+from category.cli import app as category_cli
 from finance_cli.nu import parse_nubank_csv
 
 app = typer.Typer(help="Personal finance CLI.")

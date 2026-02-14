@@ -1,6 +1,9 @@
 import typer
+from rich import console
+from rich.table import Table
 
 import category.manage as manage
+from category.normalize import get_pareto_data
 
 app = typer.Typer(help="Personal finance CLI.")
 
@@ -52,7 +55,28 @@ def update_category(
 
 
 @app.command("normalize")
-def normalize_categories(force: bool = typer.Option(False, "--force", "-f", help="Force normalization even if no changes are needed.")) -> None:
+def normalize_categories(force: bool = typer.Option(False, "--force", "-f",
+                                                    help="Force normalization even if no changes are needed.")) -> None:
     """Normalize category names."""
     app.normalize_categories(force)
     typer.echo("Category names and descriptions normalized.")
+
+
+@app.command("pareto")
+def plot_pareto():
+    data = get_pareto_data()
+    table = Table(title="Pareto Analysis (Uncategorized)")
+    table.add_column("Description", style="cyan")
+    table.add_column("Count", justify="right")
+    table.add_column("Cum. %", justify="right")
+
+    for item in data:
+        color = "green" if item["is_top_80"] else "white"
+        table.add_row(
+            item["description"],
+            str(item["count"]),
+            f"{item['cumulative_pct']:.1f}%",
+            style=color
+        )
+
+    console().print(table)
