@@ -1,7 +1,7 @@
 import sqlite3
 from datetime import date
 from core.db import connect_db
-from core.common import Statement
+from core.models import Statement
 
 
 def _row_to_statement(row: sqlite3.Row) -> Statement:
