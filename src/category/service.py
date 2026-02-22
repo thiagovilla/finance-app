@@ -1,32 +1,31 @@
 from collections import Counter
 from dataclasses import replace
 
-from category.lib.search import find_exact_match, search_best, fuzzy_search
-from models import CategorizedStatement, MatchMethod, Category, Suggestion
-from lib.ai import batch_ask_ai
+from category.lib.ai import ask_ai_many, ask_ai_one
+from category.lib.utils import find_exact_or_search, get_first_above_threshold
+from category.models import CategorizedStatement, MatchMethod
 from core.models import Statement
 
 
-def categorize_single(statement: Statement, threshold=0.85) -> CategorizedStatement:
-    if (exact_match := find_exact_match(statement)):
-        return CategorizedStatement(
-            statement=replace(statement, category=exact_match.name),
-            match_method=MatchMethod.EXACT
-        )
+def categorize_one(statement: Statement, top=5, threshold=0.85) -> CategorizedStatement:
+    """
+    Categorizes statement via exact match, search, or AI.
+    """
+    if match := find_exact_or_search(statement, top, threshold):
+        return match
 
-    if search_result := search_best(statement, threshold):
-        return CategorizedStatement(
-            statement=replace(statement, category=search_result.category.name),
-            match_method=MatchMethod.FUZZY,
-            confidence=search_result.confidence
-        )
-
-    # TODO ask AI top N return 1st that meets threshold
+    if ai_suggestions := ask_ai_one(statement, top=top):
+        if best_ai_suggestion := get_first_above_threshold(ai_suggestions, threshold=threshold):
+            return CategorizedStatement(
+                statement=replace(statement, category=best_ai_suggestion.category.name),
+                match_method=MatchMethod.AI,
+                confidence=best_ai_suggestion.confidence
+            )
 
     return CategorizedStatement(statement=statement, match_method=MatchMethod.FAILED)
 
 
-def categorize_batch(statements: list[Statement], threshold=0.85) -> list[CategorizedStatement]:
+def categorize_many(statements: list[Statement], top=5, threshold=0.85) -> list[CategorizedStatement]:
     """
     Batch-categorizes statements and returns them wrapped with match metadata.
     """
@@ -34,35 +33,21 @@ def categorize_batch(statements: list[Statement], threshold=0.85) -> list[Catego
     ask_ai_list: list[Statement] = []
 
     for stmt in statements:
-        # 1. Tier: Exact Match
-        if exact_match := find_exact_match(stmt):
-            results.append(CategorizedStatement(
-                statement=replace(stmt, category=exact_match.name),
-                match_method=MatchMethod.EXACT
-            ))
+        if match := find_exact_or_search(stmt, top=top, threshold=threshold):
+            results.append(match)
             continue
 
-        # 2. Tier: Fuzzy Match (FTS)
-        if suggestions := fuzzy_search(stmt, 1):
-            if suggestions[0].confidence >= threshold:
-                results.append(CategorizedStatement(
-                    statement=replace(stmt, category=suggestions[0].category.name),
-                    match_method=MatchMethod.FUZZY,
-                    confidence=suggestions[0].confidence
-                ))
-                continue
-
-        # 3. Tier: Prepare for AI
         ask_ai_list.append(stmt)
 
+    # Use AI to categorize statements that failed exact/search
     if ask_ai_list:
-        ai_suggestions = batch_ask_ai(ask_ai_list)
+        ai_suggestions = ask_ai_many(ask_ai_list)
         for stmt, suggestion in zip(ask_ai_list, ai_suggestions):
             good = suggestion.confidence >= threshold
             results.append(CategorizedStatement(
                 statement=stmt if not good else replace(stmt, category=suggestion.category.name),
                 match_method=MatchMethod.FAILED if not good else MatchMethod.AI,
-                confidence=suggestion.confidence
+                confidence=1 if not good else suggestion.confidence
             ))
 
     return results

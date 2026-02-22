@@ -3,7 +3,6 @@ from rich import console
 from rich.table import Table
 
 import category.manage as manage
-from category.normalize import get_pareto_data
 
 app = typer.Typer(help="Personal finance CLI.")
 

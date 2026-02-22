@@ -1,18 +1,34 @@
-def find_exact_match(conn, canonical_description: str) -> Category | None:
+from category.models import Suggestion, Category
+from core.models import Statement
+
+
+def find_exact_match(statement: Statement) -> Category | None:
     """
     Look for an exact match in the categorizations table using the canonical description.
     """
     row = conn.execute(
         "SELECT category FROM categorizations WHERE canonical_description = ?",
-        (canonical_description,),
+        (statement.normalized_description,),
     ).fetchone()
     return row[0] if row else None
 
 
-def fuzzy_search(normalized_description: str, limit=5) -> list[Suggestion]:
+# def build_match_cache(statements: list[Statement]) -> dict[str, str]:
+#     stmt_map = {stmt: stmt.normalized_description for stmt in statements}
+#     unique_normalized = list(set(stmt_map.values()))
+#     for match in _find_exact_match_many(unique_normalized):
+#         stmt_map[stmt_map[match]] = match
+#
+#
+# def _find_exact_match_many(foo: list[str]) -> list[str]:
+#     return foo
+
+
+def search_suggestions(statement: Statement, top=5) -> list[Suggestion]:
     """
     Use FTS5 to find similar descriptions and return suggestions with confidence scores.
     """
+
     with db_connect() as conn:
         rows = conn.execute(
             """
@@ -22,7 +38,7 @@ def fuzzy_search(normalized_description: str, limit=5) -> list[Suggestion]:
             ORDER BY rank
             LIMIT ?
             """,
-            (normalized_description, limit),
+            (statement.normalized_description, top),
         ).fetchall()
 
         if not rows:
@@ -43,11 +59,3 @@ def fuzzy_search(normalized_description: str, limit=5) -> list[Suggestion]:
             ))
 
         return suggestions
-
-
-def search_best(normalized_description: str, top = 5, threshold = 0.85) -> Suggestion | None:
-    suggestions = fuzzy_search(normalized_description, top=top, threshold=threshold)
-    for suggestion in suggestions:
-        if suggestion.confidence >= threshold:
-            return suggestion
-    return None
